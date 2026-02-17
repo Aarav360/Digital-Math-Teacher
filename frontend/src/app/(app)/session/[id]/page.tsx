@@ -8,16 +8,21 @@ import {
   PenTool, Eraser, Undo2, Redo2, Trash2, Hand, ZoomIn, ZoomOut,
   Type, ChevronLeft, ChevronRight, Send, Check, X, AlertTriangle,
   ArrowLeft, Loader2, MousePointer2, Lasso, BoxSelect, ChevronDown,
+  Highlighter, Minus, Square, Circle, ArrowRight, Grid3X3, ImagePlus, Download,
 } from "lucide-react";
 import { PROBLEMS, MOCK_FEEDBACK, type Problem, type StepFeedback, type ChatMessage } from "@/lib/data";
+import { cn } from "@/lib/utils";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
-type Tool = "pen" | "eraser" | "hand" | "text" | "lasso" | "selectionBox";
+type Tool = "pen" | "eraser" | "eraserPartial" | "highlighter" | "hand" | "text" | "lasso" | "selectionBox" | "line" | "rectangle" | "circle" | "arrow";
 type Point = { x: number; y: number };
-type Stroke = { points: Point[]; color: string; width: number; tool: "pen" | "eraser" };
+type Stroke = { points: Point[]; color: string; width: number; tool: "pen" | "eraser" | "eraserPartial" | "highlighter" };
+type ShapeItem = { type: "line" | "rectangle" | "circle" | "arrow"; start: Point; end: Point; color: string; width: number };
 
-const COLORS = ["#1d1d1f", "#2A7BD4", "#d63031"];
+const DEFAULT_PEN_COLOR = "#1d1d1f";
+const TOOLBAR_BUTTON_HOVER = "transition-all duration-150 hover:brightness-[0.97] active:brightness-95";
+const DEFAULT_WHITEBOARD_TITLE = "Untitled Whiteboard";
 
 const BLANK_PROBLEM: Problem = {
   id: "blank",
@@ -39,29 +44,106 @@ export default function SessionPage() {
   // Canvas state
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>("pen");
-  const [penColor, setPenColor] = useState(COLORS[0]);
+  const [penColor, setPenColor] = useState(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(2);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [undoneStrokes, setUndoneStrokes] = useState<Stroke[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
   const currentStroke = useRef<Point[]>([]);
 
-  // Selection tool dropdown
+  // Tool dropdowns
   const [showSelectDropdown, setShowSelectDropdown] = useState(false);
+  const [showEraserDropdown, setShowEraserDropdown] = useState(false);
+  const [showShapesDropdown, setShowShapesDropdown] = useState(false);
+  const [showGrid, setShowGrid] = useState(false);
   const selectBtnRef = useRef<HTMLDivElement>(null);
+  const eraserBtnRef = useRef<HTMLDivElement>(null);
+  const shapesBtnRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
+  // Shapes (line, rectangle, circle, arrow)
+  const [shapes, setShapes] = useState<ShapeItem[]>([]);
+  const shapeStartRef = useRef<Point | null>(null);
+
+  // Resizable feedback sidebar (10–40% width); width = distance from cursor to right edge
+  const [sidebarWidth, setSidebarWidth] = useState(20);
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Whiteboard title (Google Docs–style rename)
+  const [whiteboardTitle, setWhiteboardTitle] = useState(problem.title);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const titleBeforeEditRef = useRef(problem.title);
+
+  useEffect(() => {
+    setWhiteboardTitle(problem.title);
+  }, [problem.title]);
+
+  useEffect(() => {
+    if (isEditingTitle) {
+      titleBeforeEditRef.current = whiteboardTitle;
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }
+  }, [isEditingTitle]);
+
+  const saveTitle = useCallback(() => {
+    const trimmed = whiteboardTitle.trim();
+    setWhiteboardTitle(trimmed || DEFAULT_WHITEBOARD_TITLE);
+    setIsEditingTitle(false);
+  }, [whiteboardTitle]);
+
+  const cancelTitleEdit = useCallback(() => {
+    setWhiteboardTitle(titleBeforeEditRef.current);
+    setIsEditingTitle(false);
+  }, []);
+
+  const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveTitle();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelTitleEdit();
+    }
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMove = (e: MouseEvent) => {
+      const widthPercent = ((window.innerWidth - e.clientX) / window.innerWidth) * 100;
+      setSidebarWidth(Math.min(Math.max(widthPercent, 10), 40));
+    };
+    const onUp = () => setIsResizing(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isResizing]);
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (selectBtnRef.current && !selectBtnRef.current.contains(e.target as Node)) {
-        setShowSelectDropdown(false);
-      }
+      if (selectBtnRef.current?.contains(e.target as Node)) return;
+      if (eraserBtnRef.current?.contains(e.target as Node)) return;
+      if (shapesBtnRef.current?.contains(e.target as Node)) return;
+      setShowSelectDropdown(false);
+      setShowEraserDropdown(false);
+      setShowShapesDropdown(false);
     };
-    if (showSelectDropdown) {
+    if (showSelectDropdown || showEraserDropdown || showShapesDropdown) {
       document.addEventListener("mousedown", handleClickOutside);
     }
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showSelectDropdown]);
+  }, [showSelectDropdown, showEraserDropdown, showShapesDropdown]);
 
   // Analysis state
   const [showCheckButton, setShowCheckButton] = useState(false);
@@ -100,11 +182,49 @@ export default function SessionPage() {
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Draw shapes first (under strokes)
+    for (const s of shapes) {
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const x0 = s.start.x, y0 = s.start.y, x1 = s.end.x, y1 = s.end.y;
+      if (s.type === "line" || s.type === "arrow") {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        if (s.type === "arrow") {
+          const angle = Math.atan2(y1 - y0, x1 - x0);
+          const len = 12;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x1 - len * Math.cos(angle - 0.4), y1 - len * Math.sin(angle - 0.4));
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x1 - len * Math.cos(angle + 0.4), y1 - len * Math.sin(angle + 0.4));
+          ctx.stroke();
+        }
+      } else if (s.type === "rectangle") {
+        ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      } else if (s.type === "circle") {
+        const r = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2);
+        ctx.beginPath();
+        ctx.arc(x0, y0, r, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    }
+
     for (const stroke of strokes) {
       if (stroke.points.length < 2) continue;
       ctx.beginPath();
-      ctx.strokeStyle = stroke.tool === "eraser" ? "#ffffff" : stroke.color;
-      ctx.lineWidth = stroke.tool === "eraser" ? stroke.width * 5 : stroke.width;
+      if (stroke.tool === "eraser" || stroke.tool === "eraserPartial") {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = stroke.tool === "eraser" ? stroke.width * 5 : stroke.width * 2;
+      } else {
+        ctx.strokeStyle = stroke.color;
+        ctx.lineWidth = stroke.tool === "highlighter" ? stroke.width * 4 : stroke.width;
+        if (stroke.tool === "highlighter") ctx.globalAlpha = 0.4;
+      }
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
@@ -112,8 +232,9 @@ export default function SessionPage() {
         ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
       }
       ctx.stroke();
+      ctx.globalAlpha = 1;
     }
-  }, [strokes]);
+  }, [strokes, shapes]);
 
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
@@ -135,9 +256,13 @@ export default function SessionPage() {
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getPos(e);
+    if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
+      shapeStartRef.current = pos;
+      return;
+    }
     if (tool === "hand" || tool === "text" || tool === "lasso" || tool === "selectionBox") return;
     setIsDrawing(true);
-    const pos = getPos(e);
     currentStroke.current = [pos];
     resetIdleTimer();
   };
@@ -155,22 +280,53 @@ export default function SessionPage() {
     const points = currentStroke.current;
     if (points.length < 2) return;
     ctx.beginPath();
-    ctx.strokeStyle = tool === "eraser" ? "#ffffff" : penColor;
-    ctx.lineWidth = tool === "eraser" ? penWidth * 5 : penWidth;
+    if (tool === "eraser" || tool === "eraserPartial") {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = tool === "eraser" ? penWidth * 5 : penWidth * 2;
+    } else {
+      ctx.strokeStyle = tool === "highlighter" ? penColor : penColor;
+      ctx.lineWidth = tool === "highlighter" ? penWidth * 4 : penWidth;
+      if (tool === "highlighter") ctx.globalAlpha = 0.4;
+    }
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.moveTo(points[points.length - 2].x, points[points.length - 2].y);
     ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
     ctx.stroke();
+    ctx.globalAlpha = 1;
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getPos(e);
+    if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
+      const start = shapeStartRef.current;
+      if (start) {
+        setShapes((prev) => [...prev, { type: tool, start, end: pos, color: penColor, width: penWidth }]);
+        shapeStartRef.current = null;
+      }
+      return;
+    }
     if (!isDrawing) return;
     setIsDrawing(false);
     if (currentStroke.current.length > 1) {
       setStrokes((prev) => [
         ...prev,
-        { points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as "pen" | "eraser" },
+        { points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
+      ]);
+      setUndoneStrokes([]);
+    }
+    currentStroke.current = [];
+    resetIdleTimer();
+  };
+
+  const handleMouseLeave = () => {
+    shapeStartRef.current = null;
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    if (currentStroke.current.length > 1) {
+      setStrokes((prev) => [
+        ...prev,
+        { points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
       ]);
       setUndoneStrokes([]);
     }
@@ -199,6 +355,7 @@ export default function SessionPage() {
   const clearAll = () => {
     setStrokes([]);
     setUndoneStrokes([]);
+    setShapes([]);
     setFeedback([]);
     setShowCheckButton(false);
   };
@@ -251,7 +408,7 @@ export default function SessionPage() {
 
   const toolbarItems: { tool: Tool; icon: React.ElementType; label: string }[] = [
     { tool: "pen", icon: PenTool, label: "Pen" },
-    { tool: "eraser", icon: Eraser, label: "Eraser" },
+    { tool: "highlighter", icon: Highlighter, label: "Highlighter" },
     { tool: "hand", icon: Hand, label: "Pan" },
     { tool: "text", icon: Type, label: "Text" },
   ];
@@ -273,33 +430,55 @@ export default function SessionPage() {
   };
 
   return (
-    <div className="h-screen w-full bg-slate-50 flex flex-col overflow-hidden">
-      {/* Top bar */}
-      <div className="h-12 border-b border-slate-200 bg-white/80 backdrop-blur-xl flex items-center px-4 gap-4 shrink-0 z-50">
-        <Link href="/app">
-          <Button variant="ghost" size="icon-sm" className="rounded-full">
-            <ArrowLeft className="size-4" />
-          </Button>
-        </Link>
-        <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-sm font-medium text-foreground truncate">{problem.title}</h1>
-          {!isBlank && (
-            <>
-              <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full shrink-0">{problem.topic}</span>
-              <span className="flex items-center gap-0.5 shrink-0">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < problem.difficulty ? "bg-primary" : "bg-slate-200"}`} />
-                ))}
-              </span>
-            </>
-          )}
-        </div>
-      </div>
+    <div className={cn("h-full w-full bg-slate-50 flex flex-col overflow-hidden", isResizing && "select-none")}>
+      {/* Main container: fills space below Top Nav (nav h-14). Left column | resizer | right column. */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Left column (flex-1): whiteboard header + toolbar + canvas */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {/* Untitled Whiteboard header (inside left column only) – Google Docs–style rename */}
+          <div className="h-12 border-b border-slate-200 bg-white/80 backdrop-blur-xl flex items-center px-4 gap-4 shrink-0 z-10">
+            <Link href="/app">
+              <Button variant="ghost" size="icon-sm" className="rounded-full">
+                <ArrowLeft className="size-4" />
+              </Button>
+            </Link>
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              {isEditingTitle ? (
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  value={whiteboardTitle}
+                  onChange={(e) => setWhiteboardTitle(e.target.value)}
+                  onBlur={saveTitle}
+                  onKeyDown={handleTitleKeyDown}
+                  className="text-sm font-medium text-foreground bg-transparent border rounded-md px-2 py-1 min-w-[180px] max-w-[400px] w-full outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 border-slate-300 focus:border-blue-500"
+                  placeholder={DEFAULT_WHITEBOARD_TITLE}
+                  aria-label="Whiteboard title"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsEditingTitle(true)}
+                  className="text-sm font-medium text-foreground truncate text-left px-2 py-1 -ml-2 rounded-md hover:bg-slate-100 transition-colors"
+                >
+                  {whiteboardTitle || DEFAULT_WHITEBOARD_TITLE}
+                </button>
+              )}
+              {!isBlank && (
+                <>
+                  <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full shrink-0">{problem.topic}</span>
+                  <span className="flex items-center gap-0.5 shrink-0">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < problem.difficulty ? "bg-primary" : "bg-slate-200"}`} />
+                    ))}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: Whiteboard */}
-        <div className="flex-1 relative h-full flex flex-col">
+          {/* Toolbar + Canvas container */}
+          <div className="flex-1 flex flex-col min-h-0">
           {/* Toolbar */}
           <div className="flex items-center gap-1 px-4 py-2 bg-white border-b border-slate-100">
             {toolbarItems.map((item) => (
@@ -307,18 +486,112 @@ export default function SessionPage() {
                 key={item.tool}
                 variant={tool === item.tool ? "default" : "outline"}
                 size="icon"
-                className="rounded-full"
+                className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)}
                 onClick={() => setTool(item.tool)}
                 title={item.label}
               >
                 <item.icon className="size-4" />
               </Button>
             ))}
+            {/* Eraser dropdown */}
+            <div ref={eraserBtnRef} className="relative">
+              <Button
+                variant={tool === "eraser" || tool === "eraserPartial" ? "default" : "outline"}
+                className={cn("rounded-full gap-0.5 pl-3 pr-2", TOOLBAR_BUTTON_HOVER)}
+                onClick={() => setShowEraserDropdown((v) => !v)}
+                title="Eraser"
+              >
+                {tool === "eraserPartial" ? (
+                  <Eraser className="size-4" />
+                ) : (
+                  <Eraser className="size-4" />
+                )}
+                <ChevronDown className="size-3 opacity-60" />
+              </Button>
+              {showEraserDropdown && (
+                <div className="absolute top-full left-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <button
+                    className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${
+                      tool === "eraser"
+                        ? "bg-primary/10 text-primary font-medium"
+                        : "text-foreground hover:bg-slate-50"
+                    }`}
+                    onClick={() => {
+                      setTool("eraser");
+                      setShowEraserDropdown(false);
+                    }}
+                  >
+                    <Eraser className="size-4" />
+                    Eraser
+                  </button>
+                  <button
+                    className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${
+                      tool === "eraserPartial"
+                        ? "bg-primary/10 text-primary font-medium"
+                        : "text-foreground hover:bg-slate-50"
+                    }`}
+                    onClick={() => {
+                      setTool("eraserPartial");
+                      setShowEraserDropdown(false);
+                    }}
+                  >
+                    <Eraser className="size-4" />
+                    Eraser (partial)
+                  </button>
+                </div>
+              )}
+            </div>
+            {/* Shapes dropdown */}
+            <div ref={shapesBtnRef} className="relative">
+              <Button
+                variant={tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow" ? "default" : "outline"}
+                className={cn("rounded-full gap-0.5 pl-3 pr-2", TOOLBAR_BUTTON_HOVER)}
+                onClick={() => setShowShapesDropdown((v) => !v)}
+                title="Shapes"
+              >
+                {tool === "line" ? (
+                  <Minus className="size-4" />
+                ) : tool === "rectangle" ? (
+                  <Square className="size-4" />
+                ) : tool === "circle" ? (
+                  <Circle className="size-4" />
+                ) : tool === "arrow" ? (
+                  <ArrowRight className="size-4" />
+                ) : (
+                  <Square className="size-4" />
+                )}
+                <ChevronDown className="size-3 opacity-60" />
+              </Button>
+              {showShapesDropdown && (
+                <div className="absolute top-full left-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
+                  {[
+                    { tool: "line" as const, icon: Minus, label: "Line" },
+                    { tool: "rectangle" as const, icon: Square, label: "Rectangle" },
+                    { tool: "circle" as const, icon: Circle, label: "Circle" },
+                    { tool: "arrow" as const, icon: ArrowRight, label: "Arrow" },
+                  ].map(({ tool: t, icon: Icon, label }) => (
+                    <button
+                      key={t}
+                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${
+                        tool === t ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-slate-50"
+                      }`}
+                      onClick={() => {
+                        setTool(t);
+                        setShowShapesDropdown(false);
+                      }}
+                    >
+                      <Icon className="size-4" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {/* Selection tool dropdown */}
             <div ref={selectBtnRef} className="relative">
               <Button
                 variant={tool === "lasso" || tool === "selectionBox" ? "default" : "outline"}
-                className="rounded-full gap-0.5 pl-3 pr-2"
+                className={cn("rounded-full gap-0.5 pl-3 pr-2", TOOLBAR_BUTTON_HOVER)}
                 onClick={() => setShowSelectDropdown((v) => !v)}
                 title="Selection tools"
               >
@@ -365,13 +638,13 @@ export default function SessionPage() {
               )}
             </div>
             <div className="w-px h-6 bg-slate-200 mx-1" />
-            <Button variant="outline" size="icon" className="rounded-full" onClick={undo} title="Undo">
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={undo} title="Undo">
               <Undo2 className="size-4" />
             </Button>
-            <Button variant="outline" size="icon" className="rounded-full" onClick={redo} title="Redo">
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={redo} title="Redo">
               <Redo2 className="size-4" />
             </Button>
-            <Button variant="outline" size="icon" className="rounded-full" onClick={clearAll} title="Clear">
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={clearAll} title="Clear">
               <Trash2 className="size-4" />
             </Button>
             <div className="w-px h-6 bg-slate-200 mx-1" />
@@ -388,24 +661,37 @@ export default function SessionPage() {
               <span className="text-xs text-muted-foreground w-3">{penWidth}</span>
             </div>
             <div className="w-px h-6 bg-slate-200 mx-1" />
-            {/* Colors */}
+            {/* Color picker */}
             <div className="flex items-center gap-1.5">
-              {COLORS.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setPenColor(c)}
-                  className={`w-6 h-6 rounded-full border-2 transition-all ${
-                    penColor === c ? "border-primary scale-110" : "border-slate-200"
-                  }`}
-                  style={{ backgroundColor: c }}
-                />
-              ))}
+              <input
+                type="color"
+                value={penColor}
+                onChange={(e) => setPenColor(e.target.value)}
+                className="w-8 h-8 rounded-full border-2 border-slate-200 cursor-pointer bg-transparent [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full"
+                title="Pen color"
+              />
             </div>
+            <div className="w-px h-6 bg-slate-200 mx-1" />
+            <Button
+              variant={showGrid ? "default" : "outline"}
+              size="icon"
+              className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)}
+              onClick={() => setShowGrid((v) => !v)}
+              title="Grid"
+            >
+              <Grid3X3 className="size-4" />
+            </Button>
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Insert image">
+              <ImagePlus className="size-4" />
+            </Button>
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Export">
+              <Download className="size-4" />
+            </Button>
             <div className="flex-1" />
-            <Button variant="outline" size="icon-sm" className="rounded-full" title="Zoom In">
+            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom In">
               <ZoomIn className="size-3.5" />
             </Button>
-            <Button variant="outline" size="icon-sm" className="rounded-full" title="Zoom Out">
+            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom Out">
               <ZoomOut className="size-3.5" />
             </Button>
           </div>
@@ -426,7 +712,7 @@ export default function SessionPage() {
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
             />
 
             {/* Check button */}
@@ -443,10 +729,22 @@ export default function SessionPage() {
               </div>
             )}
           </div>
+          </div>
         </div>
 
-        {/* Right: Tutor Panel */}
-        <div className="w-[380px] h-full flex flex-col bg-slate-50 border-l border-slate-200 shrink-0">
+        {/* Resizer */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onMouseDown={handleResizeStart}
+          className="w-1.5 shrink-0 cursor-col-resize bg-slate-200 hover:bg-primary/30 active:bg-primary/50 transition-colors flex-shrink-0"
+        />
+
+        {/* Right: Tutor Panel (Feedback / Chat) */}
+        <div
+          style={{ width: `${sidebarWidth}%` }}
+          className="h-full flex flex-col bg-slate-50 border-l border-slate-200 shrink-0 min-w-0"
+        >
           <Tabs defaultValue="feedback" className="flex-1 flex flex-col min-h-0">
             <div className="px-4 pt-3 pb-0">
               <TabsList className="w-full">

@@ -11,8 +11,8 @@ const navItems = [
   { href: "/app", label: "Home", icon: Home },
   { href: "/problems", label: "Problems", icon: Library },
   { href: "/history", label: "History", icon: History },
-  { href: "/settings", label: "Settings", icon: Settings },
   { href: "/about", label: "Help", icon: HelpCircle },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 const EASE = "power3.out";
@@ -147,9 +147,9 @@ export function AppNav() {
         <span className="font-semibold text-foreground text-sm">MathTeacher</span>
       </Link>
 
-      {/* Nav items with GSAP pill animation */}
-      <nav className="flex items-center gap-1">
-        {navItems.map((item, i) => {
+      {/* Nav items with GSAP pill animation: left group, spacer, right group (Help, Settings) */}
+      <nav className="flex items-center gap-1 flex-1 min-w-0">
+        {navItems.slice(0, 3).map((item, i) => {
           const isActive = activeIndex === i;
           return (
             <Link
@@ -163,17 +163,43 @@ export function AppNav() {
                 isActive && "nav-pill-active"
               )}
             >
-              {/* GSAP circle reveal background */}
               <span
                 ref={(el) => { circleRefs.current[i] = el; }}
                 className="nav-pill-circle"
                 aria-hidden="true"
               />
-
-              {/* Icon - always above the circle */}
               <item.icon className="nav-pill-icon" />
-
-              {/* Label stack: default label slides up, hover label slides in */}
+              <span className="nav-pill-label-stack">
+                <span className="nav-pill-label">{item.label}</span>
+                <span className="nav-pill-label-hover" aria-hidden="true">
+                  {item.label}
+                </span>
+              </span>
+            </Link>
+          );
+        })}
+        <div className="flex-1 min-w-4" aria-hidden="true" />
+        {navItems.slice(3, 5).map((item, i) => {
+          const idx = i + 3;
+          const isActive = activeIndex === idx;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              ref={(el) => { pillRefs.current[idx] = el; }}
+              onMouseEnter={() => handleEnter(idx)}
+              onMouseLeave={() => handleLeave(idx)}
+              className={cn(
+                "nav-pill",
+                isActive && "nav-pill-active"
+              )}
+            >
+              <span
+                ref={(el) => { circleRefs.current[idx] = el; }}
+                className="nav-pill-circle"
+                aria-hidden="true"
+              />
+              <item.icon className="nav-pill-icon" />
               <span className="nav-pill-label-stack">
                 <span className="nav-pill-label">{item.label}</span>
                 <span className="nav-pill-label-hover" aria-hidden="true">
