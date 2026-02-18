@@ -78,6 +78,11 @@ export default function SessionPage() {
   const saveControllerRef = useRef<AbortController | null>(null);
   const pendingSaveRef = useRef<NodeJS.Timeout | null>(null);
   const migrationAttemptedRef = useRef<boolean>(false);
+  
+  // Refs for latest state values (to avoid stale closures in autosave)
+  const strokesRef = useRef<Stroke[]>([]);
+  const shapesRef = useRef<ShapeItem[]>([]);
+  const textItemsRef = useRef<TextItem[]>([]);
 
   // Canvas state
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -223,6 +228,17 @@ export default function SessionPage() {
     setWhiteboardTitle(problem.title);
   }, [problem.title]);
 
+  // Keep refs in sync with state for autosave
+  useEffect(() => {
+    strokesRef.current = strokes;
+  }, [strokes]);
+  useEffect(() => {
+    shapesRef.current = shapes;
+  }, [shapes]);
+  useEffect(() => {
+    textItemsRef.current = textItems;
+  }, [textItems]);
+
   // Persistence: load from backend API on mount
   useEffect(() => {
     const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
@@ -291,6 +307,11 @@ export default function SessionPage() {
           lastSaveTimestampRef.current = Date.now();
         } else if (!result.ok && result.status === 404) {
           // No snapshot yet - check for localStorage migration
+          // Guard against null currentUser before computing migrationFlagKey
+          if (!currentUser?.id) {
+            return;
+          }
+          
           const key = getDraftKey(sessionId);
           const migrationFlagKey = `${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`;
           
@@ -302,8 +323,25 @@ export default function SessionPage() {
                 if (raw) {
                   const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
                   if (data.strokes || data.shapes || data.textItems || data.imageItems) {
-                    // Attempt migration
+                    // Immediately populate UI state with parsed data
+                    if (data.strokes?.length) setStrokes(data.strokes);
+                    if (data.shapes?.length) setShapes(data.shapes);
+                    if (data.textItems?.length) setTextItems(data.textItems);
+                    if (data.imageItems?.length) {
+                      const imageItemsArray = data.imageItems;
+                      setImageItems(imageItemsArray);
+                      imageItemsArray.forEach((item) => {
+                        const img = new Image();
+                        img.onload = () => redrawCanvasRef.current();
+                        img.src = item.dataUrl;
+                        imageCacheRef.current.set(item.id, img);
+                      });
+                    }
+                    
+                    // Mark migration as attempted
                     migrationAttemptedRef.current = true;
+                    
+                    // Attempt background migration
                     const { width, height } = canvasSizeRef.current;
                     saveSnapshot(sessionId, {
                       strokes_json: {
@@ -317,21 +355,27 @@ export default function SessionPage() {
                     })
                       .then((migrateResult) => {
                         if (migrateResult.ok) {
-                          // Clear localStorage and set flag
+                          // Clear localStorage and set flag only on success
                           window.localStorage.removeItem(key);
                           window.localStorage.setItem(migrationFlagKey, "1");
                           toast.success("Draft migrated to cloud");
                         } else {
-                          toast.error("Failed to migrate draft");
+                          // On failure, leave localStorage untouched and show error
+                          console.error("Failed to migrate draft:", migrateResult.error || "Unknown error");
+                          toast.error("Failed to migrate draft. Your work is still saved locally.");
                         }
                       })
-                      .catch(() => {
-                        toast.error("Failed to migrate draft");
+                      .catch((err) => {
+                        // On error, leave localStorage untouched and show error
+                        console.error("Error migrating draft:", err);
+                        toast.error("Failed to migrate draft. Your work is still saved locally.");
                       });
                   }
                 }
-              } catch {
-                // ignore migration errors
+              } catch (err) {
+                // Log and show user-facing error, leave localStorage untouched
+                console.error("Error parsing local draft:", err);
+                toast.error("Failed to load local draft. Please refresh the page.");
               }
             }
           }
@@ -344,6 +388,19 @@ export default function SessionPage() {
         setIsLoadingSnapshot(false);
       });
   }, [params.id, currentUser?.id, isBlank, getDraftKey]);
+
+  // Helper function to attempt local backup
+  const tryWriteLocalBackup = useCallback((sessionId: string, payload: { strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; width: number; height: number }): boolean => {
+    const key = getDraftKey(sessionId);
+    if (!key || typeof window === "undefined") return false;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(payload));
+      return true;
+    } catch {
+      // quota exceeded or localStorage disabled
+      return false;
+    }
+  }, [getDraftKey]);
 
   // Persistence: save to backend API when whiteboard state changes (debounced, excludes imageItems)
   useEffect(() => {
@@ -365,31 +422,16 @@ export default function SessionPage() {
       return () => clearTimeout(t);
     }
 
-    // Backend autosave (excludes imageItems)
-    const { width, height } = canvasSizeRef.current;
-    const currentPayload = {
-      strokes,
-      shapes,
-      textItems,
-      // Exclude imageItems from autosave
-      width,
-      height,
-    };
-    const serialized = JSON.stringify(currentPayload);
-    
-    // Skip if identical to last saved state
-    if (serialized === lastSavedRef.current) {
-      return;
-    }
-
-    // Cancel previous debounce timer
+    // Cancel previous debounce timer before scheduling new one
     if (pendingSaveRef.current) {
       clearTimeout(pendingSaveRef.current);
+      pendingSaveRef.current = null;
     }
 
     // Cancel in-flight request
     if (saveControllerRef.current) {
       saveControllerRef.current.abort();
+      saveControllerRef.current = null;
     }
 
     // Set new debounce timer
@@ -397,17 +439,40 @@ export default function SessionPage() {
       // Check minimum time between saves
       const timeSinceLastSave = Date.now() - lastSaveTimestampRef.current;
       if (timeSinceLastSave < MIN_TIME_BETWEEN_SAVES_MS) {
-        // Reschedule for later
+        // Reschedule for later - clear any existing timer first, then assign new one
+        if (pendingSaveRef.current) {
+          clearTimeout(pendingSaveRef.current);
+        }
         pendingSaveRef.current = setTimeout(() => {
+          pendingSaveRef.current = null;
           performSave();
         }, MIN_TIME_BETWEEN_SAVES_MS - timeSinceLastSave);
         return;
       }
 
+      // Clear ref before calling performSave
+      pendingSaveRef.current = null;
       performSave();
     }, AUTOSAVE_DEBOUNCE_MS);
 
     const performSave = () => {
+      // Build payload and serialized from latest refs at execution time
+      const { width, height } = canvasSizeRef.current;
+      const currentPayload = {
+        strokes: strokesRef.current,
+        shapes: shapesRef.current,
+        textItems: textItemsRef.current,
+        // Exclude imageItems from autosave
+        width,
+        height,
+      };
+      const serialized = JSON.stringify(currentPayload);
+      
+      // Skip if identical to last saved state
+      if (serialized === lastSavedRef.current) {
+        return;
+      }
+
       // Create new AbortController
       const controller = new AbortController();
       saveControllerRef.current = controller;
@@ -415,9 +480,9 @@ export default function SessionPage() {
 
       saveSnapshot(sessionId, {
         strokes_json: {
-          strokes,
-          shapes,
-          textItems,
+          strokes: strokesRef.current,
+          shapes: shapesRef.current,
+          textItems: textItemsRef.current,
           // Exclude imageItems from autosave
         },
         width,
@@ -427,6 +492,7 @@ export default function SessionPage() {
           if (controller.signal.aborted) return;
 
           if (result.ok) {
+            // Update lastSavedRef with the freshly-built serialized value
             lastSavedRef.current = serialized;
             lastSaveTimestampRef.current = Date.now();
           } else {
@@ -434,7 +500,13 @@ export default function SessionPage() {
             if (result.status === 403 || result.status === 404) {
               toast.error(result.error || "Failed to save");
             } else if (result.status === 500) {
-              toast.error("Server error. Your work is saved locally.");
+              // Attempt local backup and show accurate message
+              const backupSucceeded = tryWriteLocalBackup(sessionId, currentPayload);
+              if (backupSucceeded) {
+                toast.error("Server error. Your work is saved locally.");
+              } else {
+                toast.error("Server error. Your work may not be saved.");
+              }
             } else {
               toast.error("Failed to save");
             }
@@ -456,13 +528,14 @@ export default function SessionPage() {
     return () => {
       if (pendingSaveRef.current) {
         clearTimeout(pendingSaveRef.current);
+        pendingSaveRef.current = null;
       }
       if (saveControllerRef.current) {
         saveControllerRef.current.abort();
         saveControllerRef.current = null;
       }
     };
-  }, [params.id, currentUser?.id, strokes, shapes, textItems, isBlank, getDraftKey]);
+  }, [params.id, currentUser?.id, strokes, shapes, textItems, isBlank, getDraftKey, tryWriteLocalBackup]);
 
   useEffect(() => {
     if (isEditingTitle) {

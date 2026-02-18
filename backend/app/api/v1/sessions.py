@@ -135,14 +135,10 @@ async def save_snapshot(
         image_url=None,  # TODO: upload images to blob storage and set URL
     )
     
-    try:
-        db.add(snapshot)
-        await db.commit()
-        await db.refresh(snapshot)
-        return snapshot
-    except Exception:
-        await db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snapshot")
+    db.add(snapshot)
+    await db.flush()
+    await db.refresh(snapshot)
+    return snapshot
 
 
 @router.get("/{session_id}/snapshot", response_model=SnapshotResponse)
