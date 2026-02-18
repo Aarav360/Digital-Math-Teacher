@@ -14,6 +14,7 @@ import { PROBLEMS, MOCK_FEEDBACK, type Problem, type StepFeedback, type ChatMess
 import { cn } from "@/lib/utils";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useUser } from "@/contexts/user-context";
 
 type Tool = "pen" | "eraser" | "eraserPartial" | "highlighter" | "hand" | "text" | "lasso" | "selectionBox" | "line" | "rectangle" | "circle" | "arrow";
 type Point = { x: number; y: number };
@@ -52,10 +53,17 @@ const BLANK_PROBLEM: Problem = {
 
 export default function SessionPage() {
   const params = useParams();
+  const { currentUser } = useUser();
   const isBlank = params.id === "blank";
   const problem = isBlank
     ? BLANK_PROBLEM
     : PROBLEMS.find((p) => p.id === params.id) || PROBLEMS[0];
+
+  // Helper function for draft key with user_id
+  const getDraftKey = useCallback((suffix: string) => {
+    if (!currentUser) return null; // Don't load/save if no user
+    return `${WHITEBOARD_STORAGE_KEY_PREFIX}${currentUser.id}-${suffix}`;
+  }, [currentUser]);
 
   // Canvas state
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -201,9 +209,11 @@ export default function SessionPage() {
     setWhiteboardTitle(problem.title);
   }, [problem.title]);
 
-  // Persistence: load from localStorage on mount (keyed by session/problem id)
+  // Persistence: load from localStorage on mount (keyed by user_id and session/problem id)
   useEffect(() => {
-    const key = WHITEBOARD_STORAGE_KEY_PREFIX + (params.id ?? "blank");
+    const pageId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
+    const key = getDraftKey(pageId);
+    if (!key) return; // Don't load if currentUser not ready
     try {
       const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
       if (!raw) return;
@@ -223,11 +233,13 @@ export default function SessionPage() {
     } catch {
       // ignore invalid or old data
     }
-  }, [params.id]);
+  }, [params.id, currentUser?.id, getDraftKey]);
 
   // Persistence: save to localStorage when whiteboard state changes (debounced)
   useEffect(() => {
-    const key = WHITEBOARD_STORAGE_KEY_PREFIX + (params.id ?? "blank");
+    const pageId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
+    const key = getDraftKey(pageId);
+    if (!key) return; // Don't save if currentUser not ready
     const t = setTimeout(() => {
       try {
         const payload = { strokes, shapes, textItems, imageItems };
@@ -237,7 +249,7 @@ export default function SessionPage() {
       }
     }, PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [params.id, strokes, shapes, textItems, imageItems]);
+  }, [params.id, currentUser?.id, strokes, shapes, textItems, imageItems, getDraftKey]);
 
   useEffect(() => {
     if (isEditingTitle) {
@@ -1108,8 +1120,10 @@ export default function SessionPage() {
   };
 
   const handleClearClick = () => {
-    const key = WHITEBOARD_NO_CLEAR_WARNING_PREFIX + (params.id ?? "blank");
-    if (typeof window !== "undefined" && window.localStorage.getItem(key)) {
+    const key = currentUser
+      ? `${WHITEBOARD_NO_CLEAR_WARNING_PREFIX}${currentUser.id}-${params.id ?? "blank"}`
+      : null;
+    if (key && typeof window !== "undefined" && window.localStorage.getItem(key)) {
       clearAll();
       return;
     }
@@ -1118,8 +1132,8 @@ export default function SessionPage() {
   };
 
   const handleClearConfirmYes = () => {
-    if (clearConfirmDontAskAgain && typeof window !== "undefined") {
-      const key = WHITEBOARD_NO_CLEAR_WARNING_PREFIX + (params.id ?? "blank");
+    if (clearConfirmDontAskAgain && currentUser && typeof window !== "undefined") {
+      const key = `${WHITEBOARD_NO_CLEAR_WARNING_PREFIX}${currentUser.id}-${params.id ?? "blank"}`;
       window.localStorage.setItem(key, "1");
     }
     clearAll();

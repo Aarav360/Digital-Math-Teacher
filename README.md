@@ -92,6 +92,22 @@ Next.js app with TypeScript, Tailwind CSS, Radix UI, and the App Router. Start e
 
 ---
 
+## Whiteboard (session page)
+
+The session whiteboard supports pen, highlighter, eraser, shapes, text, and images; selection (lasso/box), move, cut/copy/paste; undo/redo (including text and images); zoom toward cursor; and persistence to **localStorage** (keyed by session/problem id). Images are **draggable** and **resizable** (bottom-right handle). Copy/cut/paste use **Ctrl+C / Ctrl+X / Ctrl+V** (in-memory clipboard; paste places content at view center). Shortcuts are disabled when focus is in an input or textarea.
+
+---
+
+## Future steps (when backend/model is ready)
+
+- **Real “Check my steps”** – Send canvas snapshot to the backend, call the analysis API, and show real step feedback (OCR/LaTeX + comparison) instead of mock data.
+- **Real chat** – Wire chat to the backend (SSE streaming), load chat history from the API, and use a real LLM for tutor responses.
+- **Session id in the flow** – Create/load a backend session when starting a problem; use `session_id` for snapshot upload, analysis, and chat; optionally use session id in the URL.
+- **Backend persistence** – Optionally save/load whiteboard state from the API (e.g. `POST /canvas/snapshot` and load latest on session open) so content survives devices and browsers.
+- **Loading and error handling** – Loading states and user-facing errors (401, 404, 5xx) for all API calls; retry where appropriate.
+
+---
+
 ## Learn more
 
 - [Next.js docs](https://nextjs.org/docs)

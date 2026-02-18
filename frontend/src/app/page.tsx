@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useCallback } from "react";
 import Plasma from "@/components/plasma";
+import ShinyText from "@/components/ShinyText";
 
 export default function LandingPage() {
   const revealRefs = useRef<HTMLDivElement[]>([]);
@@ -98,10 +99,17 @@ export default function LandingPage() {
               AI-Powered Learning
             </div>
 
-            <h1 className="text-5xl md:text-7xl font-bold leading-tight tracking-tight text-slate-900">
-              A clean space for <br />
-              <span className="landing-text-gradient">messy thinking</span> &mdash; <br />
-              and smart feedback.
+            <h1 className="text-5xl md:text-7xl font-bold leading-tight tracking-tight">
+              <ShinyText
+                text={'A clean space for\nmessy thinking —\nand smart feedback.'}
+                className="whitespace-pre-line"
+                speed={2.5}
+                color="#334155"
+                shineColor="#f8fafc"
+                spread={120}
+                direction="left"
+                playCount={2}
+              />
             </h1>
 
             <p className="text-lg text-slate-600 max-w-lg leading-relaxed">

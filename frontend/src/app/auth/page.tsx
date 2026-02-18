@@ -1,7 +1,30 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { setToken } from "@/lib/auth";
+import { createGuestToken } from "@/lib/api";
 
 export default function AuthPage() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleGuestLogin() {
+    setError(null);
+    setLoading(true);
+    const res = await createGuestToken();
+    setLoading(false);
+    if (res.ok) {
+      setToken(res.data.access_token);
+      router.push("/app");
+      return;
+    }
+    setError(res.error || "Couldn't sign in as guest. Try again.");
+  }
+
   return (
     <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-6">
       <div className="bg-white/60 backdrop-blur-xl border border-white/20 shadow-xl rounded-3xl p-8 w-full max-w-sm">
@@ -23,12 +46,19 @@ export default function AuthPage() {
               Sign in with Google
             </Button>
           </Link>
-          <Link href="/app" className="block">
-            <Button variant="outline" className="w-full rounded-full" size="lg">
-              Try without signing in
-            </Button>
-          </Link>
+          <Button
+            variant="outline"
+            className="w-full rounded-full"
+            size="lg"
+            onClick={handleGuestLogin}
+            disabled={loading}
+          >
+            {loading ? "Signing in…" : "Try without signing in"}
+          </Button>
         </div>
+        {error && (
+          <p className="text-sm text-destructive text-center mt-3">{error}</p>
+        )}
         <p className="text-xs text-muted-foreground text-center mt-6">
           Guest sessions are temporary and may not keep your history.
         </p>
