@@ -19,6 +19,13 @@ type Tool = "pen" | "eraser" | "eraserPartial" | "highlighter" | "hand" | "text"
 type Point = { x: number; y: number };
 type Stroke = { points: Point[]; color: string; width: number; tool: "pen" | "eraser" | "eraserPartial" | "highlighter" };
 type ShapeItem = { type: "line" | "rectangle" | "circle" | "arrow"; start: Point; end: Point; color: string; width: number };
+type TextItem = { id: string; x: number; y: number; text: string; color: string; fontSize: number };
+type ImageItem = { id: string; x: number; y: number; width: number; height: number; dataUrl: string };
+
+const GRID_STEP = 24;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 1.2;
 
 const DEFAULT_PEN_COLOR = "#1d1d1f";
 const TOOLBAR_BUTTON_HOVER = "transition-all duration-150 hover:brightness-[0.97] active:brightness-95";
@@ -62,7 +69,48 @@ export default function SessionPage() {
 
   // Shapes (line, rectangle, circle, arrow)
   const [shapes, setShapes] = useState<ShapeItem[]>([]);
+  const [undoneShapes, setUndoneShapes] = useState<ShapeItem[]>([]);
+  const [previewShape, setPreviewShape] = useState<ShapeItem | null>(null);
   const shapeStartRef = useRef<Point | null>(null);
+
+  // Zoom & pan (view transform: world = (screen - pan) / scale, screen = world * scale + pan)
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+
+  // Canvas logical size (for HiDPI we use this for drawing; canvas buffer is size * dpr)
+  const canvasSizeRef = useRef({ width: 800, height: 600 });
+
+  // Text and image layers
+  const [textItems, setTextItems] = useState<TextItem[]>([]);
+  const [imageItems, setImageItems] = useState<ImageItem[]>([]);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  // Text tool overlay: { x, y } in world coords; id + initialText when editing existing
+  const [textEditState, setTextEditState] = useState<{ x: number; y: number; id?: string; initialText?: string } | null>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+
+  // Text item hover/drag: which text is hovered, in drag zone (8px perimeter), or being dragged
+  const [hoveredTextId, setHoveredTextId] = useState<string | null>(null);
+  const [hoveredInDragZone, setHoveredInDragZone] = useState(false);
+  const [draggingTextId, setDraggingTextId] = useState<string | null>(null);
+  const dragStartRef = useRef<{ pageX: number; pageY: number; itemX: number; itemY: number } | null>(null);
+  const textItemWrapperRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const textItemInnerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Selection (indices into strokes and shapes)
+  const [selectedStrokeIndices, setSelectedStrokeIndices] = useState<Set<number>>(new Set());
+  const [selectedShapeIndices, setSelectedShapeIndices] = useState<Set<number>>(new Set());
+  const [lassoPoints, setLassoPoints] = useState<Point[]>([]);
+  const selectionBoxStartRef = useRef<Point | null>(null);
+  const selectionBoxEndRef = useRef<Point | null>(null);
+  const isSelectingRef = useRef(false);
+
+  const redrawCanvasRef = useRef<() => void>(() => {});
+  const selectionRef = useRef<{ strokes: Set<number>; shapes: Set<number> }>({ strokes: new Set(), shapes: new Set() });
+  selectionRef.current = { strokes: selectedStrokeIndices, shapes: selectedShapeIndices };
 
   // Resizable feedback sidebar (10–40% width); width = distance from cursor to right edge
   const [sidebarWidth, setSidebarWidth] = useState(20);
@@ -129,6 +177,19 @@ export default function SessionPage() {
     setIsResizing(true);
   };
 
+  const canvasCursor =
+    draggingTextId
+      ? "grabbing"
+      : tool === "hand"
+        ? "grab"
+        : hoveredInDragZone
+          ? "move"
+          : tool === "lasso" || tool === "selectionBox"
+            ? "crosshair"
+            : tool === "text"
+              ? "text"
+              : "crosshair";
+
   // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -172,20 +233,66 @@ export default function SessionPage() {
     }
   }, [strokes.length]);
 
-  // Canvas drawing
+  // Canvas drawing (world coords; view transform applied inside)
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const { width: W, height: H } = canvasSizeRef.current;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    // Draw shapes first (under strokes)
-    for (const s of shapes) {
-      ctx.strokeStyle = s.color;
-      ctx.lineWidth = s.width;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(pan.x, pan.y);
+    ctx.scale(scale, scale);
+
+    // Grid (world coords; step in world pixels)
+    if (showGrid) {
+      ctx.strokeStyle = "#e5e7eb";
+      ctx.lineWidth = 1;
+      const left = (-pan.x / scale) - 50;
+      const top = (-pan.y / scale) - 50;
+      const right = (W - pan.x) / scale + 50;
+      const bottom = (H - pan.y) / scale + 50;
+      for (let x = Math.floor(left / GRID_STEP) * GRID_STEP; x <= right; x += GRID_STEP) {
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bottom);
+        ctx.stroke();
+      }
+      for (let y = Math.floor(top / GRID_STEP) * GRID_STEP; y <= bottom; y += GRID_STEP) {
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+      }
+    }
+
+    // Images (under shapes) — use cache so they draw once loaded
+    for (const item of imageItems) {
+      let img = imageCacheRef.current.get(item.id);
+      if (!img) {
+        img = new Image();
+        img.onload = () => redrawCanvasRef.current();
+        img.src = item.dataUrl;
+        imageCacheRef.current.set(item.id, img);
+      }
+      if (img.complete && img.naturalWidth) {
+        ctx.drawImage(img, item.x, item.y, item.width, item.height);
+      }
+    }
+
+    // Shapes
+    for (let i = 0; i < shapes.length; i++) {
+      const s = shapes[i];
+      ctx.strokeStyle = selectedShapeIndices.has(i) ? "#3b82f6" : s.color;
+      ctx.lineWidth = selectedShapeIndices.has(i) ? s.width + 2 : s.width;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       const x0 = s.start.x, y0 = s.start.y, x1 = s.end.x, y1 = s.end.y;
@@ -214,104 +321,416 @@ export default function SessionPage() {
       }
     }
 
-    for (const stroke of strokes) {
-      if (stroke.points.length < 2) continue;
-      ctx.beginPath();
-      if (stroke.tool === "eraser" || stroke.tool === "eraserPartial") {
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = stroke.tool === "eraser" ? stroke.width * 5 : stroke.width * 2;
-      } else {
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = stroke.tool === "highlighter" ? stroke.width * 4 : stroke.width;
-        if (stroke.tool === "highlighter") ctx.globalAlpha = 0.4;
-      }
+    // Preview shape (live drag preview: dashed, slightly transparent)
+    if (previewShape) {
+      const s = previewShape;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
+      ctx.globalAlpha = 0.7;
+      ctx.setLineDash([6, 4]);
+      const x0 = s.start.x, y0 = s.start.y, x1 = s.end.x, y1 = s.end.y;
+      if (s.type === "line" || s.type === "arrow") {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        if (s.type === "arrow") {
+          const angle = Math.atan2(y1 - y0, x1 - x0);
+          const len = 12;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x1 - len * Math.cos(angle - 0.4), y1 - len * Math.sin(angle - 0.4));
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x1 - len * Math.cos(angle + 0.4), y1 - len * Math.sin(angle + 0.4));
+          ctx.stroke();
+        }
+      } else if (s.type === "rectangle") {
+        ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      } else if (s.type === "circle") {
+        const r = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2);
+        ctx.beginPath();
+        ctx.arc(x0, y0, r, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    // Strokes
+    for (let i = 0; i < strokes.length; i++) {
+      const stroke = strokes[i];
+      if (stroke.points.length < 2) continue;
+      ctx.strokeStyle = selectedStrokeIndices.has(i) ? "#3b82f6" : (stroke.tool === "eraser" || stroke.tool === "eraserPartial" ? "#ffffff" : stroke.color);
+      ctx.lineWidth = (selectedStrokeIndices.has(i) ? stroke.width + 2 : stroke.tool === "eraser" ? stroke.width * 5 : stroke.tool === "eraserPartial" ? stroke.width * 2 : stroke.tool === "highlighter" ? stroke.width * 4 : stroke.width);
+      if (stroke.tool === "highlighter" && !selectedStrokeIndices.has(i)) ctx.globalAlpha = 0.4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
       ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-      for (let i = 1; i < stroke.points.length; i++) {
-        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      for (let j = 1; j < stroke.points.length; j++) {
+        ctx.lineTo(stroke.points[j].x, stroke.points[j].y);
       }
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
-  }, [strokes, shapes]);
 
+    // Current stroke in progress (so it never disappears before state commits)
+    const cur = currentStroke.current;
+    if (cur.length >= 2) {
+      ctx.strokeStyle = tool === "eraser" || tool === "eraserPartial" ? "#ffffff" : penColor;
+      ctx.lineWidth = tool === "eraser" ? penWidth * 5 : tool === "eraserPartial" ? penWidth * 2 : tool === "highlighter" ? penWidth * 4 : penWidth;
+      if (tool === "highlighter") ctx.globalAlpha = 0.4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(cur[0].x, cur[0].y);
+      for (let i = 1; i < cur.length; i++) ctx.lineTo(cur[i].x, cur[i].y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Text items are rendered as DOM overlays (see below) for hover/drag/edit; only export draws them on canvas
+
+    // Selection lasso/box overlay
+    if (lassoPoints.length >= 2) {
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(lassoPoints[0].x, lassoPoints[0].y);
+      for (let i = 1; i < lassoPoints.length; i++) ctx.lineTo(lassoPoints[i].x, lassoPoints[i].y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const boxStart = selectionBoxStartRef.current;
+    if (boxStart) {
+      const boxEnd = selectionBoxEndRef.current;
+      if (boxEnd) {
+        ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(
+          Math.min(boxStart.x, boxEnd.x), Math.min(boxStart.y, boxEnd.y),
+          Math.abs(boxEnd.x - boxStart.x), Math.abs(boxEnd.y - boxStart.y)
+        );
+        ctx.setLineDash([]);
+      }
+    }
+
+    ctx.restore();
+  }, [strokes, shapes, previewShape, textItems, imageItems, showGrid, scale, pan, tool, penColor, penWidth, selectedStrokeIndices, selectedShapeIndices, lassoPoints]);
+
+  redrawCanvasRef.current = redrawCanvas;
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
+  // Resize canvas only when container size actually changes (skip when unchanged to avoid clearing canvas and redrawing with stale strokes)
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.parentElement?.getBoundingClientRect();
-    if (rect) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-      redrawCanvas();
+    const parent = canvas?.parentElement;
+    if (!canvas || !parent) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const updateSize = () => {
+      const rect = parent.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      if (w === 0 || h === 0) return;
+      const { width: prevW, height: prevH } = canvasSizeRef.current;
+      if (w === prevW && h === prevH) return;
+      canvasSizeRef.current = { width: w, height: h };
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      redrawCanvasRef.current();
+    };
+    updateSize();
+    const ro = new ResizeObserver(updateSize);
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, []);
+
+  // Force redraw when strokes change so the new stroke is visible after mouse up (in case effect order or observer cleared the canvas)
+  useEffect(() => {
+    redrawCanvasRef.current();
+  }, [strokes]);
+
+  // Focus textarea when text overlay opens (defer so DOM has committed)
+  useEffect(() => {
+    if (textEditState !== null) {
+      const id = requestAnimationFrame(() => {
+        textAreaRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(id);
     }
-  }, [redrawCanvas]);
+  }, [textEditState]);
 
-  const getPos = (e: React.MouseEvent<HTMLCanvasElement>): Point => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const pos = getPos(e);
-    if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
-      shapeStartRef.current = pos;
+  const commitTextOverlay = useCallback(() => {
+    const value = textAreaRef.current?.value?.trim() ?? "";
+    if (!textEditState) {
+      setTextEditState(null);
       return;
     }
-    if (tool === "hand" || tool === "text" || tool === "lasso" || tool === "selectionBox") return;
+    if (textEditState.id) {
+      if (value) {
+        setTextItems((prev) =>
+          prev.map((t) => (t.id === textEditState.id ? { ...t, text: value } : t))
+        );
+      } else {
+        setTextItems((prev) => prev.filter((t) => t.id !== textEditState.id));
+      }
+    } else if (value) {
+      const baselineOffset = 14;
+      setTextItems((prev) => [
+        ...prev,
+        { id: Date.now().toString(), x: textEditState.x, y: textEditState.y + baselineOffset, text: value, color: penColor, fontSize: 16 },
+      ]);
+      setUndoneStrokes([]);
+    }
+    setTextEditState(null);
+  }, [textEditState, penColor]);
+
+  const getPos = useCallback((clientX: number, clientY: number): Point => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const screenX = clientX - rect.left;
+    const screenY = clientY - rect.top;
+    return { x: (screenX - pan.x) / scale, y: (screenY - pan.y) / scale };
+  }, [pan, scale]);
+
+  // Hit test: is (clientX, clientY) in the 8px perimeter of a text item (wrapper rect minus inner rect)?
+  const getTextHit = useCallback((clientX: number, clientY: number): { id: string; inDragZone: boolean } | null => {
+    const x = clientX;
+    const y = clientY;
+    for (const t of textItems) {
+      const wrapper = textItemWrapperRefs.current.get(t.id);
+      const inner = textItemInnerRefs.current.get(t.id);
+      if (!wrapper || !inner) continue;
+      const wr = wrapper.getBoundingClientRect();
+      const ir = inner.getBoundingClientRect();
+      const inWrapper = x >= wr.left && x <= wr.right && y >= wr.top && y <= wr.bottom;
+      const inInner = x >= ir.left && x <= ir.right && y >= ir.top && y <= ir.bottom;
+      if (inWrapper) return { id: t.id, inDragZone: inWrapper && !inInner };
+    }
+    return null;
+  }, [textItems]);
+
+  // While dragging, set global cursor to grabbing so user doesn't lose the handle
+  useEffect(() => {
+    if (draggingTextId) {
+      document.body.style.cursor = "grabbing";
+      return () => {
+        document.body.style.cursor = "";
+      };
+    }
+  }, [draggingTextId]);
+
+  // Global drag: update text position on mouse move, clear on mouse up
+  useEffect(() => {
+    if (!draggingTextId || !dragStartRef.current) return;
+    const onMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      const dx = (e.clientX - dragStartRef.current.pageX) / scale;
+      const dy = (e.clientY - dragStartRef.current.pageY) / scale;
+      setTextItems((prev) =>
+        prev.map((t) =>
+          t.id === draggingTextId
+            ? { ...t, x: dragStartRef.current!.itemX + dx, y: dragStartRef.current!.itemY + dy }
+            : t
+        )
+      );
+    };
+    const onUp = () => {
+      setDraggingTextId(null);
+      dragStartRef.current = null;
+      setHoveredTextId(null);
+      setHoveredInDragZone(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [draggingTextId, scale]);
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getPos(e.clientX, e.clientY);
+    if (tool === "hand") {
+      setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+      return;
+    }
+    if (tool === "text") {
+      setTextEditState({ x: pos.x, y: pos.y });
+      return;
+    }
+    if (tool === "lasso") {
+      isSelectingRef.current = true;
+      setLassoPoints([pos]);
+      setSelectedStrokeIndices(new Set());
+      setSelectedShapeIndices(new Set());
+      return;
+    }
+    if (tool === "selectionBox") {
+      isSelectingRef.current = true;
+      selectionBoxStartRef.current = pos;
+      selectionBoxEndRef.current = pos;
+      setSelectedStrokeIndices(new Set());
+      setSelectedShapeIndices(new Set());
+      return;
+    }
+    if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
+      shapeStartRef.current = pos;
+      setPreviewShape({ type: tool, start: pos, end: pos, color: penColor, width: penWidth });
+      return;
+    }
     setIsDrawing(true);
     currentStroke.current = [pos];
     resetIdleTimer();
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-    const pos = getPos(e);
-    currentStroke.current.push(pos);
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const points = currentStroke.current;
-    if (points.length < 2) return;
-    ctx.beginPath();
-    if (tool === "eraser" || tool === "eraserPartial") {
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = tool === "eraser" ? penWidth * 5 : penWidth * 2;
-    } else {
-      ctx.strokeStyle = tool === "highlighter" ? penColor : penColor;
-      ctx.lineWidth = tool === "highlighter" ? penWidth * 4 : penWidth;
-      if (tool === "highlighter") ctx.globalAlpha = 0.4;
+    const pos = getPos(e.clientX, e.clientY);
+    if (!draggingTextId) {
+      const hit = getTextHit(e.clientX, e.clientY);
+      if (!hit) {
+        setHoveredTextId(null);
+        setHoveredInDragZone(false);
+      }
     }
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.moveTo(points[points.length - 2].x, points[points.length - 2].y);
-    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    if (isPanning && panStartRef.current) {
+      setPan({ x: panStartRef.current.panX + (e.clientX - panStartRef.current.x), y: panStartRef.current.panY + (e.clientY - panStartRef.current.y) });
+      return;
+    }
+    if (shapeStartRef.current !== null && (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow")) {
+      setPreviewShape((prev) => prev ? { ...prev, end: pos } : null);
+      return;
+    }
+    if (isSelectingRef.current && tool === "lasso") {
+      setLassoPoints((prev) => [...prev, pos]);
+      return;
+    }
+    if (isSelectingRef.current && tool === "selectionBox" && selectionBoxStartRef.current) {
+      selectionBoxEndRef.current = pos;
+      redrawCanvasRef.current();
+      return;
+    }
+    if (!isDrawing) return;
+    currentStroke.current.push(pos);
+    redrawCanvasRef.current();
   };
 
-  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const pos = getPos(e);
-    if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
-      const start = shapeStartRef.current;
-      if (start) {
-        setShapes((prev) => [...prev, { type: tool, start, end: pos, color: penColor, width: penWidth }]);
-        shapeStartRef.current = null;
+  function pointInPolygon(p: Point, polygon: Point[]): boolean {
+    if (polygon.length < 3) return false;
+    let inside = false;
+    const n = polygon.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const xi = polygon[i].x, yi = polygon[i].y, xj = polygon[j].x, yj = polygon[j].y;
+      if (((yi > p.y) !== (yj > p.y)) && (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+  function rectsOverlap(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  /** For full eraser: return indices of strokes that intersect the eraser path (within radius). */
+  function getStrokesUnderEraser(eraserPath: Point[], eraserRadius: number, strokeList: Stroke[]): Set<number> {
+    const toRemove = new Set<number>();
+    for (let i = 0; i < strokeList.length; i++) {
+      const stroke = strokeList[i];
+      for (const p of stroke.points) {
+        for (const q of eraserPath) {
+          const dx = p.x - q.x, dy = p.y - q.y;
+          if (dx * dx + dy * dy <= eraserRadius * eraserRadius) {
+            toRemove.add(i);
+            break;
+          }
+        }
+        if (toRemove.has(i)) break;
       }
+    }
+    return toRemove;
+  }
+
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const pos = getPos(e.clientX, e.clientY);
+    if (isPanning) {
+      setIsPanning(false);
+      panStartRef.current = null;
+      return;
+    }
+    if (isSelectingRef.current && tool === "lasso" && lassoPoints.length >= 3) {
+      const poly = lassoPoints;
+      const selectedStrokes = new Set<number>();
+      strokes.forEach((stroke, i) => {
+        const cx = stroke.points.reduce((s, p) => s + p.x, 0) / stroke.points.length;
+        const cy = stroke.points.reduce((s, p) => s + p.y, 0) / stroke.points.length;
+        if (pointInPolygon({ x: cx, y: cy }, poly)) selectedStrokes.add(i);
+      });
+      const selectedShapes = new Set<number>();
+      shapes.forEach((s, i) => {
+        const cx = (s.start.x + s.end.x) / 2, cy = (s.start.y + s.end.y) / 2;
+        if (pointInPolygon({ x: cx, y: cy }, poly)) selectedShapes.add(i);
+      });
+      setSelectedStrokeIndices(selectedStrokes);
+      setSelectedShapeIndices(selectedShapes);
+      setLassoPoints([]);
+      isSelectingRef.current = false;
+      return;
+    }
+    if (isSelectingRef.current && tool === "selectionBox") {
+      const start = selectionBoxStartRef.current;
+      const end = selectionBoxEndRef.current;
+      if (start && end) {
+        const r = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), w: Math.abs(end.x - start.x), h: Math.abs(end.y - start.y) };
+        const selectedStrokes = new Set<number>();
+        strokes.forEach((stroke, i) => {
+          const minX = Math.min(...stroke.points.map((p) => p.x)), maxX = Math.max(...stroke.points.map((p) => p.x));
+          const minY = Math.min(...stroke.points.map((p) => p.y)), maxY = Math.max(...stroke.points.map((p) => p.y));
+          if (rectsOverlap(r, { x: minX, y: minY, w: maxX - minX, h: maxY - minY })) selectedStrokes.add(i);
+        });
+        const selectedShapes = new Set<number>();
+        shapes.forEach((s, i) => {
+          const minX = Math.min(s.start.x, s.end.x), maxX = Math.max(s.start.x, s.end.x);
+          const minY = Math.min(s.start.y, s.end.y), maxY = Math.max(s.start.y, s.end.y);
+          if (rectsOverlap(r, { x: minX, y: minY, w: maxX - minX, h: maxY - minY })) selectedShapes.add(i);
+        });
+        setSelectedStrokeIndices(selectedStrokes);
+        setSelectedShapeIndices(selectedShapes);
+      }
+      selectionBoxStartRef.current = null;
+      selectionBoxEndRef.current = null;
+      isSelectingRef.current = false;
+      return;
+    }
+    if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
+      if (previewShape) {
+        setShapes((prev) => [...prev, { ...previewShape }]);
+        setUndoneShapes([]);
+      }
+      setPreviewShape(null);
+      shapeStartRef.current = null;
       return;
     }
     if (!isDrawing) return;
     setIsDrawing(false);
-    if (currentStroke.current.length > 1) {
+    if (tool === "eraser") {
+      if (currentStroke.current.length > 0) {
+        const eraserRadius = penWidth * 5;
+        const toRemove = getStrokesUnderEraser(currentStroke.current, eraserRadius, strokes);
+        setStrokes((prev) => prev.filter((_, i) => !toRemove.has(i)));
+        setUndoneStrokes([]);
+      }
+    } else if (currentStroke.current.length > 1) {
+      const pointsToAdd = [...currentStroke.current];
       setStrokes((prev) => [
         ...prev,
-        { points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
+        { points: pointsToAdd, color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
       ]);
       setUndoneStrokes([]);
     }
@@ -320,10 +739,25 @@ export default function SessionPage() {
   };
 
   const handleMouseLeave = () => {
-    shapeStartRef.current = null;
+    if (isPanning) {
+      setIsPanning(false);
+      panStartRef.current = null;
+    }
+    isSelectingRef.current = false;
+    selectionBoxStartRef.current = null;
+    selectionBoxEndRef.current = null;
+    if (shapeStartRef.current !== null) {
+      setPreviewShape(null);
+      shapeStartRef.current = null;
+    }
     if (!isDrawing) return;
     setIsDrawing(false);
-    if (currentStroke.current.length > 1) {
+    if (tool === "eraser" && currentStroke.current.length > 0) {
+      const eraserRadius = penWidth * 5;
+      const toRemove = getStrokesUnderEraser(currentStroke.current, eraserRadius, strokes);
+      setStrokes((prev) => prev.filter((_, i) => !toRemove.has(i)));
+      setUndoneStrokes([]);
+    } else if (currentStroke.current.length > 1) {
       setStrokes((prev) => [
         ...prev,
         { points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
@@ -334,30 +768,197 @@ export default function SessionPage() {
     resetIdleTimer();
   };
 
-  const undo = () => {
-    setStrokes((prev) => {
-      if (prev.length === 0) return prev;
-      const last = prev[prev.length - 1];
-      setUndoneStrokes((u) => [...u, last]);
-      return prev.slice(0, -1);
-    });
-  };
+  const undo = useCallback(() => {
+    if (strokes.length > 0) {
+      setStrokes((prev) => {
+        const last = prev[prev.length - 1];
+        setUndoneStrokes((u) => [...u, last]);
+        return prev.slice(0, -1);
+      });
+    } else if (shapes.length > 0) {
+      setShapes((prev) => {
+        const last = prev[prev.length - 1];
+        setUndoneShapes((u) => [...u, last]);
+        return prev.slice(0, -1);
+      });
+    }
+  }, [strokes.length, shapes.length]);
 
-  const redo = () => {
-    setUndoneStrokes((prev) => {
-      if (prev.length === 0) return prev;
-      const last = prev[prev.length - 1];
-      setStrokes((s) => [...s, last]);
-      return prev.slice(0, -1);
-    });
-  };
+  const redo = useCallback(() => {
+    if (undoneStrokes.length > 0) {
+      setUndoneStrokes((prev) => {
+        const last = prev[prev.length - 1];
+        setStrokes((s) => [...s, last]);
+        return prev.slice(0, -1);
+      });
+    } else if (undoneShapes.length > 0) {
+      setUndoneShapes((prev) => {
+        const last = prev[prev.length - 1];
+        setShapes((s) => [...s, last]);
+        return prev.slice(0, -1);
+      });
+    }
+  }, [undoneStrokes.length, undoneShapes.length]);
+
+  // Keyboard shortcuts (must be after undo/redo are defined)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedStrokeIndices(new Set());
+        setSelectedShapeIndices(new Set());
+        setLassoPoints([]);
+        selectionBoxStartRef.current = null;
+        selectionBoxEndRef.current = null;
+        isSelectingRef.current = false;
+        if (isEditingTitle) cancelTitleEdit();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        const { strokes: si, shapes: sh } = selectionRef.current;
+        if (si.size > 0 || sh.size > 0) {
+          e.preventDefault();
+          setStrokes((prev) => prev.filter((_, i) => !si.has(i)));
+          setShapes((prev) => prev.filter((_, i) => !sh.has(i)));
+          setSelectedStrokeIndices(new Set());
+          setSelectedShapeIndices(new Set());
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo, cancelTitleEdit]);
 
   const clearAll = () => {
     setStrokes([]);
     setUndoneStrokes([]);
     setShapes([]);
+    setUndoneShapes([]);
+    setTextItems([]);
+    setImageItems([]);
+    imageCacheRef.current.clear();
+    setSelectedStrokeIndices(new Set());
+    setSelectedShapeIndices(new Set());
+    setLassoPoints([]);
     setFeedback([]);
     setShowCheckButton(false);
+  };
+
+  const deleteSelected = () => {
+    if (selectedStrokeIndices.size === 0 && selectedShapeIndices.size === 0) return;
+    setStrokes((prev) => prev.filter((_, i) => !selectedStrokeIndices.has(i)));
+    setShapes((prev) => prev.filter((_, i) => !selectedShapeIndices.has(i)));
+    setSelectedStrokeIndices(new Set());
+    setSelectedShapeIndices(new Set());
+  };
+
+  const handleZoomIn = () => setScale((s) => Math.min(MAX_ZOOM, s * ZOOM_STEP));
+  const handleZoomOut = () => setScale((s) => Math.max(MIN_ZOOM, s / ZOOM_STEP));
+
+  const handleExport = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const { width: W, height: H } = canvasSizeRef.current;
+    const off = document.createElement("canvas");
+    off.width = W * dpr;
+    off.height = H * dpr;
+    const ctx = off.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(pan.x, pan.y);
+    ctx.scale(scale, scale);
+    for (const item of imageItems) {
+      const img = new Image();
+      img.src = item.dataUrl;
+      if (img.complete && img.naturalWidth) ctx.drawImage(img, item.x, item.y, item.width, item.height);
+    }
+    for (const s of shapes) {
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const x0 = s.start.x, y0 = s.start.y, x1 = s.end.x, y1 = s.end.y;
+      if (s.type === "line" || s.type === "arrow") {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        if (s.type === "arrow") {
+          const angle = Math.atan2(y1 - y0, x1 - x0);
+          const len = 12;
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x1 - len * Math.cos(angle - 0.4), y1 - len * Math.sin(angle - 0.4));
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x1 - len * Math.cos(angle + 0.4), y1 - len * Math.sin(angle + 0.4));
+          ctx.stroke();
+        }
+      } else if (s.type === "rectangle") ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      else if (s.type === "circle") {
+        const r = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2);
+        ctx.beginPath();
+        ctx.arc(x0, y0, r, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    }
+    for (const stroke of strokes) {
+      if (stroke.points.length < 2) continue;
+      ctx.strokeStyle = stroke.tool === "eraser" || stroke.tool === "eraserPartial" ? "#ffffff" : stroke.color;
+      ctx.lineWidth = stroke.tool === "eraser" ? stroke.width * 5 : stroke.tool === "eraserPartial" ? stroke.width * 2 : stroke.tool === "highlighter" ? stroke.width * 4 : stroke.width;
+      if (stroke.tool === "highlighter") ctx.globalAlpha = 0.4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      for (let i = 1; i < stroke.points.length; i++) ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    const lineHeight = 1.2;
+    for (const t of textItems) {
+      ctx.font = `${t.fontSize}px system-ui, sans-serif`;
+      ctx.fillStyle = t.color;
+      const lines = t.text.split("\n");
+      let y = t.y;
+      for (const line of lines) {
+        ctx.fillText(line, t.x, y);
+        y += t.fontSize * lineHeight;
+      }
+    }
+    ctx.restore();
+    const link = document.createElement("a");
+    link.download = "whiteboard.png";
+    link.href = off.toDataURL("image/png");
+    link.click();
+  };
+
+  const handleInsertImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 400, maxH = 300;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > maxW || h > maxH) {
+          const r = Math.min(maxW / w, maxH / h);
+          w = Math.round(w * r);
+          h = Math.round(h * r);
+        }
+        setImageItems((prev) => [...prev, { id: Date.now().toString(), x: 50, y: 50, width: w, height: h, dataUrl }]);
+        setTimeout(() => redrawCanvasRef.current(), 0);
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
   };
 
   // Simulate analysis
@@ -681,17 +1282,24 @@ export default function SessionPage() {
             >
               <Grid3X3 className="size-4" />
             </Button>
-            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Insert image">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleInsertImage}
+            />
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Insert image" onClick={() => imageInputRef.current?.click()}>
               <ImagePlus className="size-4" />
             </Button>
-            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Export">
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Export" onClick={handleExport}>
               <Download className="size-4" />
             </Button>
             <div className="flex-1" />
-            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom In">
+            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom In" onClick={handleZoomIn}>
               <ZoomIn className="size-3.5" />
             </Button>
-            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom Out">
+            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom Out" onClick={handleZoomOut}>
               <ZoomOut className="size-3.5" />
             </Button>
           </div>
@@ -708,12 +1316,154 @@ export default function SessionPage() {
 
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full cursor-crosshair"
+              className="absolute inset-0 w-full h-full"
+              style={{ cursor: isPanning ? "grabbing" : canvasCursor }}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseLeave}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                if (t) handleMouseDown({ clientX: t.clientX, clientY: t.clientY } as React.MouseEvent<HTMLCanvasElement>);
+              }}
+              onTouchMove={(e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                if (t) handleMouseMove({ clientX: t.clientX, clientY: t.clientY } as React.MouseEvent<HTMLCanvasElement>);
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                const t = e.changedTouches[0];
+                if (t) handleMouseUp({ clientX: t.clientX, clientY: t.clientY } as React.MouseEvent<HTMLCanvasElement>);
+              }}
+              onTouchCancel={(e) => {
+                e.preventDefault();
+                handleMouseLeave();
+              }}
             />
+
+            {/* Text items as DOM overlays for hover-to-drag and click-to-edit */}
+            {textItems.map((t) => {
+              if (textEditState?.id === t.id) return null;
+              const isHovered = hoveredTextId === t.id;
+              const showOutline = (isHovered && hoveredInDragZone) || draggingTextId === t.id;
+              const top = pan.y + (t.y - 14) * scale - 8;
+              const left = pan.x + t.x * scale - 8;
+              return (
+                <div
+                  key={t.id}
+                  ref={(el) => {
+                    if (el) textItemWrapperRefs.current.set(t.id, el);
+                    else textItemWrapperRefs.current.delete(t.id);
+                  }}
+                  className={cn(
+                    "absolute z-20 p-2",
+                    draggingTextId === t.id ? "cursor-grabbing" : isHovered && hoveredInDragZone ? "cursor-move" : isHovered ? "cursor-text" : "cursor-default"
+                  )}
+                  style={{ left, top }}
+                  onMouseMove={(e) => {
+                    const hit = getTextHit(e.clientX, e.clientY);
+                    if (hit && hit.id === t.id) {
+                      setHoveredTextId(t.id);
+                      setHoveredInDragZone(hit.inDragZone);
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    if (hoveredTextId === t.id) {
+                      setHoveredTextId(null);
+                      setHoveredInDragZone(false);
+                    }
+                  }}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    const hit = getTextHit(e.clientX, e.clientY);
+                    if (!hit || hit.id !== t.id) return;
+                    if (hit.inDragZone) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDraggingTextId(t.id);
+                      dragStartRef.current = {
+                        pageX: e.clientX,
+                        pageY: e.clientY,
+                        itemX: t.x,
+                        itemY: t.y,
+                      };
+                      setHoveredTextId(t.id);
+                      setHoveredInDragZone(true);
+                    } else {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setTextEditState({
+                        x: t.x,
+                        y: t.y - 14,
+                        id: t.id,
+                        initialText: t.text,
+                      });
+                    }
+                  }}
+                >
+                  <div
+                    className={cn(
+                      "p-1 rounded border-2 border-dashed transition-[border-color] duration-200",
+                      showOutline ? "border-blue-400/50" : "border-transparent"
+                    )}
+                  >
+                    <div
+                      ref={(el) => {
+                        if (el) textItemInnerRefs.current.set(t.id, el);
+                        else textItemInnerRefs.current.delete(t.id);
+                      }}
+                      className="whitespace-pre-wrap leading-relaxed select-none pointer-events-auto"
+                      style={{
+                        font: `${t.fontSize}px system-ui, -apple-system, sans-serif`,
+                        color: t.color,
+                      }}
+                    >
+                      {t.text}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Text tool overlay: textarea at click position (after canvas so canvas receives first click), commits on blur or Enter/Ctrl+Enter */}
+            {textEditState && (
+              <textarea
+                key={textEditState.id ?? "new"}
+                ref={textAreaRef}
+                defaultValue={textEditState.initialText ?? ""}
+                className="absolute z-20 outline-none border-2 border-dashed border-transparent focus:border-blue-300 focus:ring-0 bg-white/90 rounded min-w-[120px] resize-none overflow-hidden py-1 px-2 text-base leading-relaxed shadow-sm"
+                style={{
+                  left: pan.x + textEditState.x * scale,
+                  top: pan.y + textEditState.y * scale,
+                  font: "16px system-ui, -apple-system, sans-serif",
+                  color: penColor,
+                  minHeight: "1.5em",
+                }}
+                rows={1}
+                placeholder="Type here..."
+                onBlur={commitTextOverlay}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    if (e.shiftKey) {
+                      // Shift+Enter: new line (default behavior)
+                      return;
+                    }
+                    e.preventDefault();
+                    commitTextOverlay();
+                  } else if (e.ctrlKey && e.key === "Enter") {
+                    e.preventDefault();
+                    commitTextOverlay();
+                  }
+                }}
+                onInput={(e) => {
+                  const ta = e.currentTarget;
+                  ta.style.height = "auto";
+                  ta.style.height = `${Math.max(ta.scrollHeight, 24)}px`;
+                }}
+              />
+            )}
 
             {/* Check button */}
             {showCheckButton && (
