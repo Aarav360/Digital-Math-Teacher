@@ -25,11 +25,20 @@ type ImageItem = { id: string; x: number; y: number; width: number; height: numb
 const GRID_STEP = 24;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
-const ZOOM_STEP = 1.2;
+const ZOOM_STEP_MIN = 1.05;
+const ZOOM_STEP_MAX = 1.4;
+const ZOOM_STEP_DEFAULT = 1.1;
+const ZOOM_SPEED_STORAGE_KEY = "whiteboard-zoom-speed";
+const CONSTANT_GRID_STORAGE_KEY = "whiteboard-constant-grid-size";
+const STATIC_GRID_SIZE_PX = 20;
+const GRID_COLOR = "#f0f0f0";
 
 const DEFAULT_PEN_COLOR = "#1d1d1f";
 const TOOLBAR_BUTTON_HOVER = "transition-all duration-150 hover:brightness-[0.97] active:brightness-95";
 const DEFAULT_WHITEBOARD_TITLE = "Untitled Whiteboard";
+const WHITEBOARD_STORAGE_KEY_PREFIX = "whiteboard-draft-";
+const WHITEBOARD_NO_CLEAR_WARNING_PREFIX = "whiteboard-no-clear-warning-";
+const PERSIST_DEBOUNCE_MS = 800;
 
 const BLANK_PROBLEM: Problem = {
   id: "blank",
@@ -67,6 +76,35 @@ export default function SessionPage() {
   const eraserBtnRef = useRef<HTMLDivElement>(null);
   const shapesBtnRef = useRef<HTMLDivElement>(null);
 
+  // Zoom speed and constant grid: read from localStorage (set in Settings page); re-read on focus so other tab changes apply
+  const [zoomStep, setZoomStep] = useState(() => {
+    if (typeof window === "undefined") return ZOOM_STEP_DEFAULT;
+    const stored = window.localStorage.getItem(ZOOM_SPEED_STORAGE_KEY);
+    if (stored == null) return ZOOM_STEP_DEFAULT;
+    const n = parseFloat(stored);
+    if (!Number.isFinite(n) || n < ZOOM_STEP_MIN || n > ZOOM_STEP_MAX) return ZOOM_STEP_DEFAULT;
+    return n;
+  });
+  const [constantGridSize, setConstantGridSize] = useState(() => {
+    if (typeof window === "undefined") return true;
+    const stored = window.localStorage.getItem(CONSTANT_GRID_STORAGE_KEY);
+    if (stored == null) return true;
+    return stored === "1" || stored === "true";
+  });
+  useEffect(() => {
+    const syncFromStorage = () => {
+      const z = window.localStorage.getItem(ZOOM_SPEED_STORAGE_KEY);
+      if (z != null) {
+        const n = parseFloat(z);
+        if (Number.isFinite(n) && n >= ZOOM_STEP_MIN && n <= ZOOM_STEP_MAX) setZoomStep(n);
+      }
+      const g = window.localStorage.getItem(CONSTANT_GRID_STORAGE_KEY);
+      if (g != null) setConstantGridSize(g === "1" || g === "true");
+    };
+    window.addEventListener("focus", syncFromStorage);
+    return () => window.removeEventListener("focus", syncFromStorage);
+  }, []);
+
   // Shapes (line, rectangle, circle, arrow)
   const [shapes, setShapes] = useState<ShapeItem[]>([]);
   const [undoneShapes, setUndoneShapes] = useState<ShapeItem[]>([]);
@@ -81,10 +119,15 @@ export default function SessionPage() {
 
   // Canvas logical size (for HiDPI we use this for drawing; canvas buffer is size * dpr)
   const canvasSizeRef = useRef({ width: 800, height: 600 });
+  // Current pan/scale for async use (e.g. place new image at view center)
+  const viewTransformRef = useRef({ pan: { x: 0, y: 0 }, scale: 1 });
+  viewTransformRef.current = { pan, scale };
 
   // Text and image layers
   const [textItems, setTextItems] = useState<TextItem[]>([]);
   const [imageItems, setImageItems] = useState<ImageItem[]>([]);
+  const [undoneTextItems, setUndoneTextItems] = useState<TextItem[]>([]);
+  const [undoneImageItems, setUndoneImageItems] = useState<ImageItem[]>([]);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Text tool overlay: { x, y } in world coords; id + initialText when editing existing
@@ -99,6 +142,34 @@ export default function SessionPage() {
   const dragStartRef = useRef<{ pageX: number; pageY: number; itemX: number; itemY: number } | null>(null);
   const textItemWrapperRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const textItemInnerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Image drag and resize
+  const [draggingImageId, setDraggingImageId] = useState<string | null>(null);
+  const imageDragStartRef = useRef<{ pageX: number; pageY: number; itemX: number; itemY: number } | null>(null);
+  const [resizingImageId, setResizingImageId] = useState<string | null>(null);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const imageResizeStartRef = useRef<{
+    pageX: number;
+    pageY: number;
+    itemX: number;
+    itemY: number;
+    itemW: number;
+    itemH: number;
+    aspectRatio: number;
+  } | null>(null);
+
+  // Clipboard for cut/copy/paste (strokes and shapes only)
+  const clipboardRef = useRef<{ strokes: Stroke[]; shapes: ShapeItem[] } | null>(null);
+  const HANDLE_SIZE = 16;
+  const MIN_IMAGE_SIZE = 24;
+
+  // Selection move (drag selected strokes/shapes)
+  const isMovingSelectionRef = useRef(false);
+  const moveSelectionStartRef = useRef<{ pageX: number; pageY: number } | null>(null);
+
+  // Last mouse position for zoom-toward-cursor
+  const lastMouseRef = useRef<{ clientX: number; clientY: number }>({ clientX: 0, clientY: 0 });
+  const handleCheckStepsRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   // Selection (indices into strokes and shapes)
   const [selectedStrokeIndices, setSelectedStrokeIndices] = useState<Set<number>>(new Set());
@@ -116,6 +187,10 @@ export default function SessionPage() {
   const [sidebarWidth, setSidebarWidth] = useState(20);
   const [isResizing, setIsResizing] = useState(false);
 
+  // Clear-all confirmation dialog
+  const [showClearConfirmDialog, setShowClearConfirmDialog] = useState(false);
+  const [clearConfirmDontAskAgain, setClearConfirmDontAskAgain] = useState(false);
+
   // Whiteboard title (Google Docs–style rename)
   const [whiteboardTitle, setWhiteboardTitle] = useState(problem.title);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -125,6 +200,44 @@ export default function SessionPage() {
   useEffect(() => {
     setWhiteboardTitle(problem.title);
   }, [problem.title]);
+
+  // Persistence: load from localStorage on mount (keyed by session/problem id)
+  useEffect(() => {
+    const key = WHITEBOARD_STORAGE_KEY_PREFIX + (params.id ?? "blank");
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+      if (!raw) return;
+      const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
+      if (data.strokes?.length) setStrokes(data.strokes);
+      if (data.shapes?.length) setShapes(data.shapes);
+      if (data.textItems?.length) setTextItems(data.textItems);
+      if (data.imageItems?.length) {
+        setImageItems(data.imageItems);
+        data.imageItems.forEach((item) => {
+          const img = new Image();
+          img.onload = () => redrawCanvasRef.current();
+          img.src = item.dataUrl;
+          imageCacheRef.current.set(item.id, img);
+        });
+      }
+    } catch {
+      // ignore invalid or old data
+    }
+  }, [params.id]);
+
+  // Persistence: save to localStorage when whiteboard state changes (debounced)
+  useEffect(() => {
+    const key = WHITEBOARD_STORAGE_KEY_PREFIX + (params.id ?? "blank");
+    const t = setTimeout(() => {
+      try {
+        const payload = { strokes, shapes, textItems, imageItems };
+        window.localStorage.setItem(key, JSON.stringify(payload));
+      } catch {
+        // quota or disabled
+      }
+    }, PERSIST_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [params.id, strokes, shapes, textItems, imageItems]);
 
   useEffect(() => {
     if (isEditingTitle) {
@@ -245,16 +358,18 @@ export default function SessionPage() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, W, H);
+    if (!(showGrid && constantGridSize)) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, W, H);
+    }
 
     ctx.save();
     ctx.translate(pan.x, pan.y);
     ctx.scale(scale, scale);
 
-    // Grid (world coords; step in world pixels)
-    if (showGrid) {
-      ctx.strokeStyle = "#e5e7eb";
+    // Grid on canvas (only when grid is on and NOT constant size; constant-size grid is drawn via CSS on wrapper)
+    if (showGrid && !constantGridSize) {
+      ctx.strokeStyle = GRID_COLOR;
       ctx.lineWidth = 1;
       const left = (-pan.x / scale) - 50;
       const top = (-pan.y / scale) - 50;
@@ -421,7 +536,7 @@ export default function SessionPage() {
     }
 
     ctx.restore();
-  }, [strokes, shapes, previewShape, textItems, imageItems, showGrid, scale, pan, tool, penColor, penWidth, selectedStrokeIndices, selectedShapeIndices, lassoPoints]);
+  }, [strokes, shapes, previewShape, textItems, imageItems, showGrid, constantGridSize, scale, pan, tool, penColor, penWidth, selectedStrokeIndices, selectedShapeIndices, lassoPoints]);
 
   redrawCanvasRef.current = redrawCanvas;
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
@@ -487,7 +602,7 @@ export default function SessionPage() {
         ...prev,
         { id: Date.now().toString(), x: textEditState.x, y: textEditState.y + baselineOffset, text: value, color: penColor, fontSize: 16 },
       ]);
-      setUndoneStrokes([]);
+      setUndoneTextItems([]);
     }
     setTextEditState(null);
   }, [textEditState, penColor]);
@@ -518,15 +633,21 @@ export default function SessionPage() {
     return null;
   }, [textItems]);
 
-  // While dragging, set global cursor to grabbing so user doesn't lose the handle
+  // While dragging or resizing text/image, set global cursor
   useEffect(() => {
-    if (draggingTextId) {
+    if (draggingTextId || draggingImageId) {
       document.body.style.cursor = "grabbing";
       return () => {
         document.body.style.cursor = "";
       };
     }
-  }, [draggingTextId]);
+    if (resizingImageId) {
+      document.body.style.cursor = "nwse-resize";
+      return () => {
+        document.body.style.cursor = "";
+      };
+    }
+  }, [draggingTextId, draggingImageId, resizingImageId]);
 
   // Global drag: update text position on mouse move, clear on mouse up
   useEffect(() => {
@@ -557,7 +678,82 @@ export default function SessionPage() {
     };
   }, [draggingTextId, scale]);
 
+  // Global image drag
+  useEffect(() => {
+    if (!draggingImageId || !imageDragStartRef.current) return;
+    const onMove = (e: MouseEvent) => {
+      if (!imageDragStartRef.current) return;
+      const dx = (e.clientX - imageDragStartRef.current.pageX) / scale;
+      const dy = (e.clientY - imageDragStartRef.current.pageY) / scale;
+      setImageItems((prev) =>
+        prev.map((img) =>
+          img.id === draggingImageId
+            ? { ...img, x: imageDragStartRef.current!.itemX + dx, y: imageDragStartRef.current!.itemY + dy }
+            : img
+        )
+      );
+    };
+    const onUp = () => {
+      setDraggingImageId(null);
+      imageDragStartRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [draggingImageId, scale]);
+
+  // Global image resize (bottom-right handle): proportional by default, Shift = free-form; anchor = top-left (opposite corner)
+  useEffect(() => {
+    if (!resizingImageId || !imageResizeStartRef.current) return;
+    const onMove = (e: MouseEvent) => {
+      const start = imageResizeStartRef.current;
+      if (!start) return;
+      const dw = (e.clientX - start.pageX) / scale;
+      const dh = (e.clientY - start.pageY) / scale;
+      let newW: number;
+      let newH: number;
+      if (e.shiftKey) {
+        newW = Math.max(MIN_IMAGE_SIZE, start.itemW + dw);
+        newH = Math.max(MIN_IMAGE_SIZE, start.itemH + dh);
+      } else {
+        newW = Math.max(MIN_IMAGE_SIZE, start.itemW + dw);
+        newH = newW / start.aspectRatio;
+        if (newH < MIN_IMAGE_SIZE) {
+          newH = MIN_IMAGE_SIZE;
+          newW = newH * start.aspectRatio;
+        }
+      }
+      setImageItems((prev) =>
+        prev.map((img) =>
+          img.id === resizingImageId
+            ? { ...img, x: start.itemX, y: start.itemY, width: newW, height: newH }
+            : img
+        )
+      );
+    };
+    const onUp = () => {
+      setResizingImageId(null);
+      imageResizeStartRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [resizingImageId, scale]);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setSelectedImageId(null);
+    if (e.button === 2) {
+      e.preventDefault();
+      setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+      return;
+    }
     const pos = getPos(e.clientX, e.clientY);
     if (tool === "hand") {
       setIsPanning(true);
@@ -588,13 +784,49 @@ export default function SessionPage() {
       setPreviewShape({ type: tool, start: pos, end: pos, color: penColor, width: penWidth });
       return;
     }
+    // Start moving selection if click is inside selection bounds
+    const bounds = getSelectionBounds();
+    if (bounds && (selectedStrokeIndices.size > 0 || selectedShapeIndices.size > 0)) {
+      const pad = 4;
+      if (pos.x >= bounds.minX - pad && pos.x <= bounds.maxX + pad && pos.y >= bounds.minY - pad && pos.y <= bounds.maxY + pad) {
+        isMovingSelectionRef.current = true;
+        moveSelectionStartRef.current = { pageX: e.clientX, pageY: e.clientY };
+        return;
+      }
+    }
     setIsDrawing(true);
     currentStroke.current = [pos];
     resetIdleTimer();
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY };
     const pos = getPos(e.clientX, e.clientY);
+    if (isMovingSelectionRef.current && moveSelectionStartRef.current) {
+      const dx = (e.clientX - moveSelectionStartRef.current.pageX) / scale;
+      const dy = (e.clientY - moveSelectionStartRef.current.pageY) / scale;
+      moveSelectionStartRef.current = { pageX: e.clientX, pageY: e.clientY };
+      setStrokes((prev) =>
+        prev.map((stroke, i) =>
+          selectedStrokeIndices.has(i)
+            ? { ...stroke, points: stroke.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+            : stroke
+        )
+      );
+      setShapes((prev) =>
+        prev.map((shape, i) =>
+          selectedShapeIndices.has(i)
+            ? {
+                ...shape,
+                start: { x: shape.start.x + dx, y: shape.start.y + dy },
+                end: { x: shape.end.x + dx, y: shape.end.y + dy },
+              }
+            : shape
+        )
+      );
+      redrawCanvasRef.current();
+      return;
+    }
     if (!draggingTextId) {
       const hit = getTextHit(e.clientX, e.clientY);
       if (!hit) {
@@ -638,6 +870,29 @@ export default function SessionPage() {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
 
+  /** Bounding box of current selection (strokes + shapes) in world coords; null if empty. */
+  function getSelectionBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    const { strokes: si, shapes: sh } = selectionRef.current;
+    if (si.size === 0 && sh.size === 0) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    si.forEach((i) => {
+      const s = strokes[i];
+      if (!s) return;
+      s.points.forEach((p) => {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      });
+    });
+    sh.forEach((i) => {
+      const s = shapes[i];
+      if (!s) return;
+      minX = Math.min(minX, s.start.x, s.end.x); maxX = Math.max(maxX, s.start.x, s.end.x);
+      minY = Math.min(minY, s.start.y, s.end.y); maxY = Math.max(maxY, s.start.y, s.end.y);
+    });
+    if (minX === Infinity) return null;
+    return { minX, minY, maxX, maxY };
+  }
+
   /** For full eraser: return indices of strokes that intersect the eraser path (within radius). */
   function getStrokesUnderEraser(eraserPath: Point[], eraserRadius: number, strokeList: Stroke[]): Set<number> {
     const toRemove = new Set<number>();
@@ -659,6 +914,11 @@ export default function SessionPage() {
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const pos = getPos(e.clientX, e.clientY);
+    if (isMovingSelectionRef.current) {
+      isMovingSelectionRef.current = false;
+      moveSelectionStartRef.current = null;
+      return;
+    }
     if (isPanning) {
       setIsPanning(false);
       panStartRef.current = null;
@@ -739,6 +999,10 @@ export default function SessionPage() {
   };
 
   const handleMouseLeave = () => {
+    if (isMovingSelectionRef.current) {
+      isMovingSelectionRef.current = false;
+      moveSelectionStartRef.current = null;
+    }
     if (isPanning) {
       setIsPanning(false);
       panStartRef.current = null;
@@ -781,8 +1045,20 @@ export default function SessionPage() {
         setUndoneShapes((u) => [...u, last]);
         return prev.slice(0, -1);
       });
+    } else if (textItems.length > 0) {
+      setTextItems((prev) => {
+        const last = prev[prev.length - 1];
+        setUndoneTextItems((u) => [...u, last]);
+        return prev.slice(0, -1);
+      });
+    } else if (imageItems.length > 0) {
+      setImageItems((prev) => {
+        const last = prev[prev.length - 1];
+        setUndoneImageItems((u) => [...u, last]);
+        return prev.slice(0, -1);
+      });
     }
-  }, [strokes.length, shapes.length]);
+  }, [strokes.length, shapes.length, textItems.length, imageItems.length]);
 
   const redo = useCallback(() => {
     if (undoneStrokes.length > 0) {
@@ -797,38 +1073,20 @@ export default function SessionPage() {
         setShapes((s) => [...s, last]);
         return prev.slice(0, -1);
       });
+    } else if (undoneTextItems.length > 0) {
+      setUndoneTextItems((prev) => {
+        const last = prev[prev.length - 1];
+        setTextItems((t) => [...t, last]);
+        return prev.slice(0, -1);
+      });
+    } else if (undoneImageItems.length > 0) {
+      setUndoneImageItems((prev) => {
+        const last = prev[prev.length - 1];
+        setImageItems((i) => [...i, last]);
+        return prev.slice(0, -1);
+      });
     }
-  }, [undoneStrokes.length, undoneShapes.length]);
-
-  // Keyboard shortcuts (must be after undo/redo are defined)
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setSelectedStrokeIndices(new Set());
-        setSelectedShapeIndices(new Set());
-        setLassoPoints([]);
-        selectionBoxStartRef.current = null;
-        selectionBoxEndRef.current = null;
-        isSelectingRef.current = false;
-        if (isEditingTitle) cancelTitleEdit();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
-        e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-      } else if (e.key === "Backspace" || e.key === "Delete") {
-        const { strokes: si, shapes: sh } = selectionRef.current;
-        if (si.size > 0 || sh.size > 0) {
-          e.preventDefault();
-          setStrokes((prev) => prev.filter((_, i) => !si.has(i)));
-          setShapes((prev) => prev.filter((_, i) => !sh.has(i)));
-          setSelectedStrokeIndices(new Set());
-          setSelectedShapeIndices(new Set());
-        }
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [undo, redo, cancelTitleEdit]);
+  }, [undoneStrokes.length, undoneShapes.length, undoneTextItems.length, undoneImageItems.length]);
 
   const clearAll = () => {
     setStrokes([]);
@@ -836,13 +1094,40 @@ export default function SessionPage() {
     setShapes([]);
     setUndoneShapes([]);
     setTextItems([]);
+    setUndoneTextItems([]);
     setImageItems([]);
+    setUndoneImageItems([]);
     imageCacheRef.current.clear();
+    setSelectedImageId(null);
+    setResizingImageId(null);
     setSelectedStrokeIndices(new Set());
     setSelectedShapeIndices(new Set());
     setLassoPoints([]);
     setFeedback([]);
     setShowCheckButton(false);
+  };
+
+  const handleClearClick = () => {
+    const key = WHITEBOARD_NO_CLEAR_WARNING_PREFIX + (params.id ?? "blank");
+    if (typeof window !== "undefined" && window.localStorage.getItem(key)) {
+      clearAll();
+      return;
+    }
+    setClearConfirmDontAskAgain(false);
+    setShowClearConfirmDialog(true);
+  };
+
+  const handleClearConfirmYes = () => {
+    if (clearConfirmDontAskAgain && typeof window !== "undefined") {
+      const key = WHITEBOARD_NO_CLEAR_WARNING_PREFIX + (params.id ?? "blank");
+      window.localStorage.setItem(key, "1");
+    }
+    clearAll();
+    setShowClearConfirmDialog(false);
+  };
+
+  const handleClearConfirmNo = () => {
+    setShowClearConfirmDialog(false);
   };
 
   const deleteSelected = () => {
@@ -853,8 +1138,181 @@ export default function SessionPage() {
     setSelectedShapeIndices(new Set());
   };
 
-  const handleZoomIn = () => setScale((s) => Math.min(MAX_ZOOM, s * ZOOM_STEP));
-  const handleZoomOut = () => setScale((s) => Math.max(MIN_ZOOM, s / ZOOM_STEP));
+  const copySelection = useCallback(() => {
+    const { strokes: si, shapes: sh } = selectionRef.current;
+    if (si.size === 0 && sh.size === 0) return;
+    const strokesToCopy = strokes
+      .filter((_, i) => si.has(i))
+      .map((s) => ({ ...s, points: s.points.map((p) => ({ ...p })) }));
+    const shapesToCopy = shapes
+      .filter((_, i) => sh.has(i))
+      .map((s) => ({ ...s, start: { ...s.start }, end: { ...s.end } }));
+    clipboardRef.current = { strokes: strokesToCopy, shapes: shapesToCopy };
+  }, [strokes, shapes]);
+
+  const cutSelection = useCallback(() => {
+    copySelection();
+    deleteSelected();
+  }, [copySelection]);
+
+  const pasteSelection = useCallback(() => {
+    const clip = clipboardRef.current;
+    if (!clip || (clip.strokes.length === 0 && clip.shapes.length === 0)) return;
+    const allPoints: Point[] = [];
+    clip.strokes.forEach((s) => s.points.forEach((p) => allPoints.push(p)));
+    clip.shapes.forEach((s) => {
+      allPoints.push(s.start);
+      allPoints.push(s.end);
+    });
+    if (allPoints.length === 0) return;
+    const centroid = {
+      x: allPoints.reduce((a, p) => a + p.x, 0) / allPoints.length,
+      y: allPoints.reduce((a, p) => a + p.y, 0) / allPoints.length,
+    };
+    const { width: W, height: H } = canvasSizeRef.current;
+    const pasteCenter = {
+      x: (W / 2 - pan.x) / scale,
+      y: (H / 2 - pan.y) / scale,
+    };
+    const dx = pasteCenter.x - centroid.x;
+    const dy = pasteCenter.y - centroid.y;
+    const newStrokes: Stroke[] = clip.strokes.map((s) => ({
+      ...s,
+      points: s.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+    }));
+    const newShapes: ShapeItem[] = clip.shapes.map((s) => ({
+      ...s,
+      start: { x: s.start.x + dx, y: s.start.y + dy },
+      end: { x: s.end.x + dx, y: s.end.y + dy },
+    }));
+    const baseStroke = strokes.length;
+    const baseShape = shapes.length;
+    setStrokes((prev) => [...prev, ...newStrokes]);
+    setShapes((prev) => [...prev, ...newShapes]);
+    setUndoneStrokes([]);
+    setUndoneShapes([]);
+    setSelectedStrokeIndices(new Set(Array.from({ length: newStrokes.length }, (_, i) => baseStroke + i)));
+    setSelectedShapeIndices(new Set(Array.from({ length: newShapes.length }, (_, i) => baseShape + i)));
+  }, [pan.x, pan.y, scale, strokes.length, shapes.length]);
+
+  // When clear-confirm dialog is open, handle Enter (Yes) and Escape (No)
+  useEffect(() => {
+    if (!showClearConfirmDialog) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleClearConfirmNo();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        handleClearConfirmYes();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showClearConfirmDialog]);
+
+  // Keyboard shortcuts (must be after undo/redo and copy/cut/paste are defined)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (showClearConfirmDialog) return;
+      const inInput =
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable;
+      if (e.key === "Escape") {
+        setSelectedImageId(null);
+        setSelectedStrokeIndices(new Set());
+        setSelectedShapeIndices(new Set());
+        setLassoPoints([]);
+        selectionBoxStartRef.current = null;
+        selectionBoxEndRef.current = null;
+        isSelectingRef.current = false;
+        if (isEditingTitle) cancelTitleEdit();
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        if (selectedImageId) {
+          e.preventDefault();
+          setImageItems((prev) => prev.filter((i) => i.id !== selectedImageId));
+          setSelectedImageId(null);
+        } else {
+          const { strokes: si, shapes: sh } = selectionRef.current;
+          if (si.size > 0 || sh.size > 0) {
+            e.preventDefault();
+            setStrokes((prev) => prev.filter((_, i) => !si.has(i)));
+            setShapes((prev) => prev.filter((_, i) => !sh.has(i)));
+            setSelectedStrokeIndices(new Set());
+            setSelectedShapeIndices(new Set());
+          }
+        }
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleCheckStepsRef.current();
+      } else if (!inInput && (e.metaKey || e.ctrlKey) && e.key === "c") {
+        copySelection();
+      } else if (!inInput && (e.metaKey || e.ctrlKey) && e.key === "x") {
+        e.preventDefault();
+        cutSelection();
+      } else if (!inInput && (e.metaKey || e.ctrlKey) && e.key === "v") {
+        e.preventDefault();
+        pasteSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo, cancelTitleEdit, copySelection, cutSelection, pasteSelection, selectedImageId, showClearConfirmDialog]);
+
+  const handleZoomIn = useCallback(() => {
+    const canvas = canvasRef.current;
+    const newScale = Math.min(MAX_ZOOM, scale * zoomStep);
+    if (!canvas || newScale === scale) {
+      setScale(newScale);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const { clientX, clientY } = lastMouseRef.current;
+    const screenX = clientX - rect.left;
+    const screenY = clientY - rect.top;
+    setPan({
+      x: screenX - ((screenX - pan.x) / scale) * newScale,
+      y: screenY - ((screenY - pan.y) / scale) * newScale,
+    });
+    setScale(newScale);
+  }, [scale, pan.x, pan.y, zoomStep]);
+
+  const handleZoomOut = useCallback(() => {
+    const canvas = canvasRef.current;
+    const newScale = Math.max(MIN_ZOOM, scale / zoomStep);
+    if (!canvas || newScale === scale) {
+      setScale(newScale);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const { clientX, clientY } = lastMouseRef.current;
+    const screenX = clientX - rect.left;
+    const screenY = clientY - rect.top;
+    setPan({
+      x: screenX - ((screenX - pan.x) / scale) * newScale,
+      y: screenY - ((screenY - pan.y) / scale) * newScale,
+    });
+    setScale(newScale);
+  }, [scale, pan.x, pan.y, zoomStep]);
+
+  // Mouse wheel zoom (passive: false so preventDefault works)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY };
+      if (e.deltaY < 0) handleZoomIn();
+      else if (e.deltaY > 0) handleZoomOut();
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, [handleZoomIn, handleZoomOut]);
 
   const handleExport = () => {
     const canvas = canvasRef.current;
@@ -937,12 +1395,20 @@ export default function SessionPage() {
     link.click();
   };
 
+  const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
   const handleInsertImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
+    if (!file) return;
+    const type = file.type?.toLowerCase();
+    if (!type || !ALLOWED_IMAGE_TYPES.includes(type)) {
+      console.warn("Insert image: only JPEG, PNG, WebP, and GIF are allowed.");
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
+      if (!dataUrl || typeof dataUrl !== "string") return;
       const img = new Image();
       img.onload = () => {
         const maxW = 400, maxH = 300;
@@ -952,10 +1418,26 @@ export default function SessionPage() {
           w = Math.round(w * r);
           h = Math.round(h * r);
         }
-        setImageItems((prev) => [...prev, { id: Date.now().toString(), x: 50, y: 50, width: w, height: h, dataUrl }]);
+        const id = Date.now().toString();
+        const { pan: p, scale: s } = viewTransformRef.current;
+        const { width: W, height: H } = canvasSizeRef.current;
+        const viewCenterX = (W / 2 - p.x) / s;
+        const viewCenterY = (H / 2 - p.y) / s;
+        const x = viewCenterX - w / 2;
+        const y = viewCenterY - h / 2;
+        const newItem: ImageItem = { id, x, y, width: w, height: h, dataUrl };
+        imageCacheRef.current.set(id, img);
+        setImageItems((prev) => [...prev, newItem]);
+        setUndoneImageItems([]);
         setTimeout(() => redrawCanvasRef.current(), 0);
       };
+      img.onerror = () => {
+        console.warn("Image load failed for upload");
+      };
       img.src = dataUrl;
+    };
+    reader.onerror = () => {
+      console.warn("FileReader failed to read image");
     };
     reader.readAsDataURL(file);
     e.target.value = "";
@@ -974,6 +1456,9 @@ export default function SessionPage() {
     setFeedback(MOCK_FEEDBACK);
     setCurrentStep(0);
   };
+  useEffect(() => {
+    handleCheckStepsRef.current = handleCheckSteps;
+  }, [handleCheckSteps]);
 
   // Simulate chat
   const handleSendChat = async () => {
@@ -1239,14 +1724,11 @@ export default function SessionPage() {
               )}
             </div>
             <div className="w-px h-6 bg-slate-200 mx-1" />
-            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={undo} title="Undo">
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={undo} title="Undo" aria-label="Undo (Ctrl+Z)">
               <Undo2 className="size-4" />
             </Button>
-            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={redo} title="Redo">
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={redo} title="Redo" aria-label="Redo (Ctrl+Shift+Z)">
               <Redo2 className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={clearAll} title="Clear">
-              <Trash2 className="size-4" />
             </Button>
             <div className="w-px h-6 bg-slate-200 mx-1" />
             {/* Pen width */}
@@ -1285,27 +1767,104 @@ export default function SessionPage() {
             <input
               ref={imageInputRef}
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
               className="hidden"
               onChange={handleInsertImage}
             />
-            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Insert image" onClick={() => imageInputRef.current?.click()}>
+            <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Insert image (JPEG, PNG, WebP, GIF)" onClick={() => imageInputRef.current?.click()}>
               <ImagePlus className="size-4" />
             </Button>
             <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Export" onClick={handleExport}>
               <Download className="size-4" />
             </Button>
             <div className="flex-1" />
-            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom In" onClick={handleZoomIn}>
+            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom In" aria-label="Zoom in (toward cursor)" onClick={handleZoomIn}>
               <ZoomIn className="size-3.5" />
             </Button>
-            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom Out" onClick={handleZoomOut}>
+            <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom Out" aria-label="Zoom out (toward cursor)" onClick={handleZoomOut}>
               <ZoomOut className="size-3.5" />
+            </Button>
+            <div className="w-px h-6 bg-slate-200 mx-1" />
+            <Button
+              variant="outline"
+              size="icon"
+              className="rounded-full border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 transition-all duration-150 active:bg-red-100"
+              onClick={handleClearClick}
+              title="Clear entire whiteboard"
+              aria-label="Clear entire whiteboard"
+            >
+              <Trash2 className="size-4" />
             </Button>
           </div>
 
+          {/* Clear whiteboard confirmation dialog */}
+          {showClearConfirmDialog && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="clear-dialog-title"
+              aria-describedby="clear-dialog-desc"
+              onClick={(e) => e.target === e.currentTarget && handleClearConfirmNo()}
+            >
+              <div
+                className="bg-white rounded-xl shadow-xl border border-slate-200 p-5 w-full max-w-sm mx-4"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    handleClearConfirmNo();
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleClearConfirmYes();
+                  }
+                }}
+              >
+                <h2 id="clear-dialog-title" className="text-base font-semibold text-foreground mb-1">
+                  Clear entire whiteboard?
+                </h2>
+                <p id="clear-dialog-desc" className="text-sm text-muted-foreground mb-4">
+                  This will permanently delete all strokes, shapes, text, and images on this whiteboard.
+                </p>
+                <label className="flex items-center gap-2 text-sm text-foreground mb-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={clearConfirmDontAskAgain}
+                    onChange={(e) => setClearConfirmDontAskAgain(e.target.checked)}
+                    className="rounded border-slate-300"
+                  />
+                  Don&apos;t ask me this again
+                </label>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={handleClearConfirmNo}>
+                    No
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleClearConfirmYes}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    Yes
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Canvas */}
-          <div className="flex-1 relative overflow-hidden bg-white">
+          <div
+            className="flex-1 relative overflow-hidden bg-white"
+            style={
+              showGrid && constantGridSize
+                ? {
+                    backgroundImage: `linear-gradient(to right, ${GRID_COLOR} 1px, transparent 1px), linear-gradient(to bottom, ${GRID_COLOR} 1px, transparent 1px)`,
+                    backgroundSize: `${STATIC_GRID_SIZE_PX}px ${STATIC_GRID_SIZE_PX}px`,
+                    backgroundPosition: `${pan.x}px ${pan.y}px`,
+                  }
+                : undefined
+            }
+          >
             {/* Problem text pinned (hidden on blank whiteboards) */}
             {!isBlank && (
               <div className="absolute top-4 left-4 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs">
@@ -1316,8 +1875,10 @@ export default function SessionPage() {
 
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full"
+              className="absolute inset-0 w-full h-full z-0"
               style={{ cursor: isPanning ? "grabbing" : canvasCursor }}
+              aria-label="Whiteboard drawing canvas. Use pen, shapes, or text to work. Pan with hand tool or right-click drag; zoom with scroll wheel or toolbar buttons."
+              onContextMenu={(e) => e.preventDefault()}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
@@ -1427,6 +1988,98 @@ export default function SessionPage() {
               );
             })}
 
+            {/* Image items as draggable/resizable DOM overlays; click to select (outline + delete X + resize handle) */}
+            {imageItems.map((img) => {
+              const isSelected = selectedImageId === img.id;
+              const showOutline = isSelected || resizingImageId === img.id;
+              return (
+                <div
+                  key={img.id}
+                  className={cn(
+                    "absolute z-20 transition-[box-shadow]",
+                    showOutline && "ring-2 ring-dashed ring-blue-400 ring-offset-1",
+                    resizingImageId === img.id
+                      ? "cursor-nwse-resize"
+                      : "cursor-grab active:cursor-grabbing"
+                  )}
+                  style={{
+                    left: pan.x + img.x * scale,
+                    top: pan.y + img.y * scale,
+                    width: img.width * scale,
+                    height: img.height * scale,
+                  }}
+                  role="img"
+                  aria-label={isSelected ? "Image selected; press Delete to remove" : "Click to select image"}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    if (resizingImageId === img.id) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelectedImageId(img.id);
+                    setDraggingImageId(img.id);
+                    imageDragStartRef.current = {
+                      pageX: e.clientX,
+                      pageY: e.clientY,
+                      itemX: img.x,
+                      itemY: img.y,
+                    };
+                  }}
+                >
+                  <img
+                    src={img.dataUrl || ""}
+                    alt=""
+                    className="w-full h-full object-contain pointer-events-none select-none bg-slate-100/50"
+                    draggable={false}
+                  />
+                  {/* Delete button: top-left, only when selected */}
+                  {isSelected && (
+                    <button
+                      type="button"
+                      className="absolute -top-1 -left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-red-500 text-white shadow-md hover:bg-red-600 active:bg-red-700 transition-colors"
+                      title="Delete image"
+                      aria-label="Delete image"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setImageItems((prev) => prev.filter((i) => i.id !== img.id));
+                        setSelectedImageId(null);
+                        setResizingImageId(null);
+                      }}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                  {/* Resize handle: bottom-right, only when selected */}
+                  {isSelected && (
+                    <div
+                      className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize border-l-2 border-t-2 border-slate-400/80 bg-white/50 rounded-tl"
+                      style={{ touchAction: "none" }}
+                      title="Resize (hold Shift for free-form)"
+                      aria-label="Resize image; hold Shift for free-form"
+                      onMouseDown={(e) => {
+                        if (e.button !== 0) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setResizingImageId(img.id);
+                        setDraggingImageId(null);
+                        imageDragStartRef.current = null;
+                        const aspectRatio = img.width / img.height;
+                        imageResizeStartRef.current = {
+                          pageX: e.clientX,
+                          pageY: e.clientY,
+                          itemX: img.x,
+                          itemY: img.y,
+                          itemW: img.width,
+                          itemH: img.height,
+                          aspectRatio,
+                        };
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+
             {/* Text tool overlay: textarea at click position (after canvas so canvas receives first click), commits on blur or Enter/Ctrl+Enter */}
             {textEditState && (
               <textarea
@@ -1467,11 +2120,12 @@ export default function SessionPage() {
 
             {/* Check button */}
             {showCheckButton && (
-              <div className="absolute bottom-6 right-6 z-10 animate-in fade-in duration-300">
+              <div className="absolute bottom-6 right-6 z-10 animate-in fade-in duration-300" role="region" aria-label="Check work">
                 <Button
                   onClick={handleCheckSteps}
                   className="rounded-full shadow-lg gap-2"
                   size="lg"
+                  aria-label="Check my steps (shortcut: Ctrl+Enter or Command+Enter)"
                 >
                   <Check className="size-4" />
                   Check my steps

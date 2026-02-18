@@ -1,11 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TUTOR_PERSONAS } from "@/lib/data";
 import { Check } from "lucide-react";
+
+const ZOOM_SPEED_STORAGE_KEY = "whiteboard-zoom-speed";
+const CONSTANT_GRID_STORAGE_KEY = "whiteboard-constant-grid-size";
+const ZOOM_STEP_MIN = 1.05;
+const ZOOM_STEP_MAX = 1.4;
+const ZOOM_STEP_DEFAULT = 1.1;
 
 const helpLevels = [
   "Just point out mistakes",
@@ -20,7 +26,20 @@ export default function SettingsPage() {
   const [penThickness, setPenThickness] = useState<"fine" | "medium" | "thick">("medium");
   const [smoothStrokes, setSmoothStrokes] = useState(true);
   const [showGrid, setShowGrid] = useState(false);
+  const [zoomSpeed, setZoomSpeed] = useState(ZOOM_STEP_DEFAULT);
+  const [constantGridSize, setConstantGridSize] = useState(true);
   const [saveHistory, setSaveHistory] = useState(true);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const z = window.localStorage.getItem(ZOOM_SPEED_STORAGE_KEY);
+    if (z != null) {
+      const n = parseFloat(z);
+      if (Number.isFinite(n) && n >= ZOOM_STEP_MIN && n <= ZOOM_STEP_MAX) setZoomSpeed(n);
+    }
+    const g = window.localStorage.getItem(CONSTANT_GRID_STORAGE_KEY);
+    if (g != null) setConstantGridSize(g === "1" || g === "true");
+  }, []);
   const [name, setName] = useState("");
   const [grade, setGrade] = useState("");
   const [saved, setSaved] = useState(false);
@@ -149,6 +168,50 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between">
               <span className="text-sm text-foreground">Subtle grid background</span>
               <Switch checked={showGrid} onCheckedChange={(v) => { setShowGrid(v); showSaved(); }} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground mb-2">Zoom speed (whiteboard)</p>
+              <p className="text-xs text-muted-foreground mb-2">
+                How fast zoom in/out (buttons and scroll) changes the view. Slower = finer control.
+              </p>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground shrink-0">Slower</span>
+                <input
+                  type="range"
+                  min={Math.round(ZOOM_STEP_MIN * 100)}
+                  max={Math.round(ZOOM_STEP_MAX * 100)}
+                  step={1}
+                  value={Math.round(zoomSpeed * 100)}
+                  onChange={(e) => {
+                    const v = Math.round(Number(e.target.value)) / 100;
+                    setZoomSpeed(v);
+                    if (typeof window !== "undefined") window.localStorage.setItem(ZOOM_SPEED_STORAGE_KEY, String(v));
+                    showSaved();
+                  }}
+                  className="flex-1 h-2 accent-primary"
+                  aria-label="Zoom speed"
+                />
+                <span className="text-xs text-muted-foreground shrink-0">Faster</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Current: <strong>{zoomSpeed.toFixed(2)}×</strong> per step
+              </p>
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-foreground">Constant grid size</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  When on, the grid stays the same visual size when you zoom; when off, the grid zooms with the board.
+                </p>
+              </div>
+              <Switch
+                checked={constantGridSize}
+                onCheckedChange={(v) => {
+                  setConstantGridSize(v);
+                  if (typeof window !== "undefined") window.localStorage.setItem(CONSTANT_GRID_STORAGE_KEY, v ? "1" : "0");
+                  showSaved();
+                }}
+              />
             </div>
           </CardContent>
         </Card>
