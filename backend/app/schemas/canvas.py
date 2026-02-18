@@ -34,3 +34,21 @@ class CanvasSnapshotRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SnapshotUpdate(BaseModel):
+    """Request schema for PUT /sessions/{session_id}/snapshot"""
+    strokes_json: dict  # {strokes, shapes, textItems, imageItems}
+    width: int
+    height: int
+
+
+class SnapshotResponse(BaseModel):
+    """Response schema for snapshot endpoints"""
+    id: str
+    strokes_json: dict
+    width: int
+    height: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

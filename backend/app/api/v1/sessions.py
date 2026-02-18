@@ -3,11 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import CurrentUserId, DbSession
+from app.api.deps import CurrentUserId, CurrentUser, DbSession
 from app.models.session import Session, SessionStatus
 from app.models.problem import Problem
 from app.models.step import Step, StepEvaluation
+from app.models.canvas_snapshot import CanvasSnapshot
 from app.schemas.session import SessionCreate, SessionUpdate, SessionRead, SessionWithProblem, SessionListEntry
+from app.schemas.canvas import SnapshotUpdate, SnapshotResponse
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -106,3 +108,68 @@ async def update_session(session_id: str, body: SessionUpdate, user_id: CurrentU
     await db.flush()
     await db.refresh(session)
     return session
+
+
+@router.put("/{session_id}/snapshot", status_code=status.HTTP_201_CREATED, response_model=SnapshotResponse)
+async def save_snapshot(
+    session_id: str,
+    body: SnapshotUpdate,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    """Create a new snapshot for a session. Creates immutable versioned snapshots."""
+    # Validate session exists AND belongs to user
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.user_id == current_user.id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    
+    # Create new snapshot row (immutable versioning)
+    snapshot = CanvasSnapshot(
+        session_id=session_id,
+        strokes_json=body.strokes_json,
+        width=body.width,
+        height=body.height,
+        image_url=None,  # TODO: upload images to blob storage and set URL
+    )
+    
+    try:
+        db.add(snapshot)
+        await db.commit()
+        await db.refresh(snapshot)
+        return snapshot
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snapshot")
+
+
+@router.get("/{session_id}/snapshot", response_model=SnapshotResponse)
+async def get_snapshot(
+    session_id: str,
+    current_user: CurrentUser,
+    db: DbSession,
+):
+    """Get the latest snapshot for a session."""
+    # Validate session exists AND belongs to user
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.user_id == current_user.id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    
+    # Query latest snapshot
+    snapshot_result = await db.execute(
+        select(CanvasSnapshot)
+        .where(CanvasSnapshot.session_id == session_id)
+        .order_by(CanvasSnapshot.created_at.desc())
+        .limit(1)
+    )
+    snapshot = snapshot_result.scalar_one_or_none()
+    
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No snapshot yet")
+    
+    return snapshot

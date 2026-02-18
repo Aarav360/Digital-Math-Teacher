@@ -15,6 +15,8 @@ import { cn } from "@/lib/utils";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@/contexts/user-context";
+import { saveSnapshot, loadSnapshot } from "@/lib/api";
+import { toast } from "sonner";
 
 type Tool = "pen" | "eraser" | "eraserPartial" | "highlighter" | "hand" | "text" | "lasso" | "selectionBox" | "line" | "rectangle" | "circle" | "arrow";
 type Point = { x: number; y: number };
@@ -40,6 +42,9 @@ const DEFAULT_WHITEBOARD_TITLE = "Untitled Whiteboard";
 const WHITEBOARD_STORAGE_KEY_PREFIX = "whiteboard-draft-";
 const WHITEBOARD_NO_CLEAR_WARNING_PREFIX = "whiteboard-no-clear-warning-";
 const PERSIST_DEBOUNCE_MS = 800;
+const AUTOSAVE_DEBOUNCE_MS = 2500; // 2.5 seconds
+const MIN_TIME_BETWEEN_SAVES_MS = 2000; // 2 seconds minimum between saves
+const MIGRATION_FLAG_PREFIX = "migrated-snapshot-";
 
 const BLANK_PROBLEM: Problem = {
   id: "blank",
@@ -64,6 +69,15 @@ export default function SessionPage() {
     if (!currentUser) return null; // Don't load/save if no user
     return `${WHITEBOARD_STORAGE_KEY_PREFIX}${currentUser.id}-${suffix}`;
   }, [currentUser]);
+
+  // Snapshot persistence state
+  const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
+  const [isSavingSnapshot, setIsSavingSnapshot] = useState(false);
+  const lastSavedRef = useRef<string>("");
+  const lastSaveTimestampRef = useRef<number>(0);
+  const saveControllerRef = useRef<AbortController | null>(null);
+  const pendingSaveRef = useRef<NodeJS.Timeout | null>(null);
+  const migrationAttemptedRef = useRef<boolean>(false);
 
   // Canvas state
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -209,47 +223,246 @@ export default function SessionPage() {
     setWhiteboardTitle(problem.title);
   }, [problem.title]);
 
-  // Persistence: load from localStorage on mount (keyed by user_id and session/problem id)
+  // Persistence: load from backend API on mount
   useEffect(() => {
-    const pageId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
-    const key = getDraftKey(pageId);
-    if (!key) return; // Don't load if currentUser not ready
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
-      if (!raw) return;
-      const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
-      if (data.strokes?.length) setStrokes(data.strokes);
-      if (data.shapes?.length) setShapes(data.shapes);
-      if (data.textItems?.length) setTextItems(data.textItems);
-      if (data.imageItems?.length) {
-        setImageItems(data.imageItems);
-        data.imageItems.forEach((item) => {
-          const img = new Image();
-          img.onload = () => redrawCanvasRef.current();
-          img.src = item.dataUrl;
-          imageCacheRef.current.set(item.id, img);
-        });
+    const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
+    
+    // Skip API calls for blank sessions (use localStorage only)
+    if (isBlank || sessionId === "blank" || !currentUser) {
+      // Fallback to localStorage for blank sessions
+      const key = getDraftKey(sessionId);
+      if (key) {
+        try {
+          const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+          if (raw) {
+            const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
+            if (data.strokes?.length) setStrokes(data.strokes);
+            if (data.shapes?.length) setShapes(data.shapes);
+            if (data.textItems?.length) setTextItems(data.textItems);
+            if (data.imageItems?.length) {
+              setImageItems(data.imageItems);
+              data.imageItems.forEach((item) => {
+                const img = new Image();
+                img.onload = () => redrawCanvasRef.current();
+                img.src = item.dataUrl;
+                imageCacheRef.current.set(item.id, img);
+              });
+            }
+          }
+        } catch {
+          // ignore invalid or old data
+        }
       }
-    } catch {
-      // ignore invalid or old data
+      return;
     }
-  }, [params.id, currentUser?.id, getDraftKey]);
 
-  // Persistence: save to localStorage when whiteboard state changes (debounced)
+    // Load from backend API
+    setIsLoadingSnapshot(true);
+    loadSnapshot(sessionId)
+      .then((result) => {
+        if (result.ok && result.data) {
+          const { strokes_json, width, height } = result.data;
+          if (strokes_json.strokes?.length) setStrokes(strokes_json.strokes as Stroke[]);
+          if (strokes_json.shapes?.length) setShapes(strokes_json.shapes as ShapeItem[]);
+          if (strokes_json.textItems?.length) setTextItems(strokes_json.textItems as TextItem[]);
+          if (strokes_json.imageItems?.length) {
+            const imageItemsArray = strokes_json.imageItems as ImageItem[];
+            setImageItems(imageItemsArray);
+            imageItemsArray.forEach((item) => {
+              const img = new Image();
+              img.onload = () => redrawCanvasRef.current();
+              img.src = item.dataUrl;
+              imageCacheRef.current.set(item.id, img);
+            });
+          }
+          // Update canvas size if needed
+          if (width && height) {
+            canvasSizeRef.current = { width, height };
+          }
+          // Mark as saved
+          const saved = JSON.stringify({
+            strokes: strokes_json.strokes || [],
+            shapes: strokes_json.shapes || [],
+            textItems: strokes_json.textItems || [],
+            width,
+            height,
+          });
+          lastSavedRef.current = saved;
+          lastSaveTimestampRef.current = Date.now();
+        } else if (!result.ok && result.status === 404) {
+          // No snapshot yet - check for localStorage migration
+          const key = getDraftKey(sessionId);
+          const migrationFlagKey = `${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`;
+          
+          if (key && !migrationAttemptedRef.current && typeof window !== "undefined") {
+            const hasMigrationFlag = window.localStorage.getItem(migrationFlagKey);
+            if (!hasMigrationFlag) {
+              try {
+                const raw = window.localStorage.getItem(key);
+                if (raw) {
+                  const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
+                  if (data.strokes || data.shapes || data.textItems || data.imageItems) {
+                    // Attempt migration
+                    migrationAttemptedRef.current = true;
+                    const { width, height } = canvasSizeRef.current;
+                    saveSnapshot(sessionId, {
+                      strokes_json: {
+                        strokes: data.strokes || [],
+                        shapes: data.shapes || [],
+                        textItems: data.textItems || [],
+                        imageItems: data.imageItems || [],
+                      },
+                      width,
+                      height,
+                    })
+                      .then((migrateResult) => {
+                        if (migrateResult.ok) {
+                          // Clear localStorage and set flag
+                          window.localStorage.removeItem(key);
+                          window.localStorage.setItem(migrationFlagKey, "1");
+                          toast.success("Draft migrated to cloud");
+                        } else {
+                          toast.error("Failed to migrate draft");
+                        }
+                      })
+                      .catch(() => {
+                        toast.error("Failed to migrate draft");
+                      });
+                  }
+                }
+              } catch {
+                // ignore migration errors
+              }
+            }
+          }
+        }
+      })
+      .catch(() => {
+        // Network error - silently fail, start empty
+      })
+      .finally(() => {
+        setIsLoadingSnapshot(false);
+      });
+  }, [params.id, currentUser?.id, isBlank, getDraftKey]);
+
+  // Persistence: save to backend API when whiteboard state changes (debounced, excludes imageItems)
   useEffect(() => {
-    const pageId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
-    const key = getDraftKey(pageId);
-    if (!key) return; // Don't save if currentUser not ready
-    const t = setTimeout(() => {
-      try {
-        const payload = { strokes, shapes, textItems, imageItems };
-        window.localStorage.setItem(key, JSON.stringify(payload));
-      } catch {
-        // quota or disabled
+    const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
+    
+    // Skip API calls for blank sessions (use localStorage only)
+    if (isBlank || sessionId === "blank" || !currentUser) {
+      // Fallback to localStorage for blank sessions
+      const key = getDraftKey(sessionId);
+      if (!key) return;
+      const t = setTimeout(() => {
+        try {
+          const payload = { strokes, shapes, textItems, imageItems };
+          window.localStorage.setItem(key, JSON.stringify(payload));
+        } catch {
+          // quota or disabled
+        }
+      }, PERSIST_DEBOUNCE_MS);
+      return () => clearTimeout(t);
+    }
+
+    // Backend autosave (excludes imageItems)
+    const { width, height } = canvasSizeRef.current;
+    const currentPayload = {
+      strokes,
+      shapes,
+      textItems,
+      // Exclude imageItems from autosave
+      width,
+      height,
+    };
+    const serialized = JSON.stringify(currentPayload);
+    
+    // Skip if identical to last saved state
+    if (serialized === lastSavedRef.current) {
+      return;
+    }
+
+    // Cancel previous debounce timer
+    if (pendingSaveRef.current) {
+      clearTimeout(pendingSaveRef.current);
+    }
+
+    // Cancel in-flight request
+    if (saveControllerRef.current) {
+      saveControllerRef.current.abort();
+    }
+
+    // Set new debounce timer
+    pendingSaveRef.current = setTimeout(() => {
+      // Check minimum time between saves
+      const timeSinceLastSave = Date.now() - lastSaveTimestampRef.current;
+      if (timeSinceLastSave < MIN_TIME_BETWEEN_SAVES_MS) {
+        // Reschedule for later
+        pendingSaveRef.current = setTimeout(() => {
+          performSave();
+        }, MIN_TIME_BETWEEN_SAVES_MS - timeSinceLastSave);
+        return;
       }
-    }, PERSIST_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [params.id, currentUser?.id, strokes, shapes, textItems, imageItems, getDraftKey]);
+
+      performSave();
+    }, AUTOSAVE_DEBOUNCE_MS);
+
+    const performSave = () => {
+      // Create new AbortController
+      const controller = new AbortController();
+      saveControllerRef.current = controller;
+      setIsSavingSnapshot(true);
+
+      saveSnapshot(sessionId, {
+        strokes_json: {
+          strokes,
+          shapes,
+          textItems,
+          // Exclude imageItems from autosave
+        },
+        width,
+        height,
+      })
+        .then((result) => {
+          if (controller.signal.aborted) return;
+
+          if (result.ok) {
+            lastSavedRef.current = serialized;
+            lastSaveTimestampRef.current = Date.now();
+          } else {
+            // Error handling
+            if (result.status === 403 || result.status === 404) {
+              toast.error(result.error || "Failed to save");
+            } else if (result.status === 500) {
+              toast.error("Server error. Your work is saved locally.");
+            } else {
+              toast.error("Failed to save");
+            }
+          }
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          // Network error
+          toast.error("Failed to save. Check your connection.");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsSavingSnapshot(false);
+            saveControllerRef.current = null;
+          }
+        });
+    };
+
+    return () => {
+      if (pendingSaveRef.current) {
+        clearTimeout(pendingSaveRef.current);
+      }
+      if (saveControllerRef.current) {
+        saveControllerRef.current.abort();
+        saveControllerRef.current = null;
+      }
+    };
+  }, [params.id, currentUser?.id, strokes, shapes, textItems, isBlank, getDraftKey]);
 
   useEffect(() => {
     if (isEditingTitle) {
@@ -1459,6 +1672,67 @@ export default function SessionPage() {
 
   // Simulate analysis
   const handleCheckSteps = async () => {
+    const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
+    
+    // Immediate save before analysis (includes imageItems - explicit action)
+    if (!isBlank && sessionId !== "blank" && currentUser) {
+      // Cancel any pending debounce
+      if (pendingSaveRef.current) {
+        clearTimeout(pendingSaveRef.current);
+        pendingSaveRef.current = null;
+      }
+
+      // Abort in-flight requests
+      if (saveControllerRef.current) {
+        saveControllerRef.current.abort();
+      }
+
+      // Create new controller for immediate save
+      const controller = new AbortController();
+      saveControllerRef.current = controller;
+      setIsSavingSnapshot(true);
+
+      const { width, height } = canvasSizeRef.current;
+      try {
+        const result = await saveSnapshot(sessionId, {
+          strokes_json: {
+            strokes,
+            shapes,
+            textItems,
+            imageItems, // Include imageItems for explicit action
+          },
+          width,
+          height,
+        });
+
+        if (!controller.signal.aborted) {
+          if (result.ok) {
+            // Update saved state
+            const saved = JSON.stringify({
+              strokes,
+              shapes,
+              textItems,
+              width,
+              height,
+            });
+            lastSavedRef.current = saved;
+            lastSaveTimestampRef.current = Date.now();
+          } else {
+            toast.error("Failed to save before analysis");
+          }
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          toast.error("Failed to save before analysis");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsSavingSnapshot(false);
+          saveControllerRef.current = null;
+        }
+      }
+    }
+
     setShowCheckButton(false);
     setIsAnalyzing(true);
     const texts = ["Reading your steps...", "Analyzing your work...", "Reviewing step 2...", "Almost done..."];
@@ -1573,6 +1847,11 @@ export default function SessionPage() {
                     ))}
                   </span>
                 </>
+              )}
+              {isBlank && (
+                <span className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full shrink-0 border border-amber-200">
+                  Local scratchpad; not saved to your account
+                </span>
               )}
             </div>
           </div>
@@ -1879,6 +2158,23 @@ export default function SessionPage() {
                 : undefined
             }
           >
+            {/* Loading overlay for initial snapshot load */}
+            {isLoadingSnapshot && (
+              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50">
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="size-6 text-primary animate-spin" />
+                  <p className="text-sm text-muted-foreground">Loading whiteboard...</p>
+                </div>
+              </div>
+            )}
+
+            {/* Saving indicator (subtle, bottom-right) */}
+            {isSavingSnapshot && !isLoadingSnapshot && (
+              <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-sm border border-slate-200 rounded-lg px-3 py-2 shadow-sm z-40 flex items-center gap-2">
+                <Loader2 className="size-3.5 text-primary animate-spin" />
+                <span className="text-xs text-muted-foreground">Saving...</span>
+              </div>
+            )}
             {/* Problem text pinned (hidden on blank whiteboards) */}
             {!isBlank && (
               <div className="absolute top-4 left-4 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs">

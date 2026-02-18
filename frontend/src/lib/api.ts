@@ -62,3 +62,21 @@ export async function getMe(): Promise<
 > {
   return apiFetch("/api/v1/auth/me");
 }
+
+/** PUT /api/v1/sessions/{sessionId}/snapshot — save snapshot */
+export async function saveSnapshot(
+  sessionId: string,
+  payload: { strokes_json: { strokes: unknown[]; shapes: unknown[]; textItems: unknown[]; imageItems?: unknown[] }; width: number; height: number }
+): Promise<ApiResponse<{ id: string; strokes_json: unknown; width: number; height: number; created_at: string }>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}/snapshot`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** GET /api/v1/sessions/{sessionId}/snapshot — load latest snapshot */
+export async function loadSnapshot(
+  sessionId: string
+): Promise<ApiResponse<{ id: string; strokes_json: { strokes: unknown[]; shapes: unknown[]; textItems: unknown[]; imageItems?: unknown[] }; width: number; height: number; created_at: string }>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}/snapshot`);
+}
