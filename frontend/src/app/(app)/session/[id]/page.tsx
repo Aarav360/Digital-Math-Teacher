@@ -101,6 +101,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
             statement: p.statement,
           });
           setIsLoadingSession(false);
+        } else if (!sess.problem_id) {
+          setSessionError("Problem not found");
+          setIsLoadingSession(false);
         } else {
           return getProblem(sess.problem_id).then((probRes) => {
             if (cancelled) return;

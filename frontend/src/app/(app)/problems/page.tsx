@@ -19,7 +19,7 @@ export default function ProblemsPage() {
   const [problems, setProblems] = useState<ProblemListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [startingProblemId, setStartingProblemId] = useState<string | null>(null);
+  const [startingProblemIds, setStartingProblemIds] = useState<Set<string>>(new Set());
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -75,18 +75,18 @@ export default function ProblemsPage() {
   }, [fetchProblems]);
 
   const handleStart = async (problemId: string) => {
-    setStartingProblemId(problemId);
+    setStartingProblemIds((prev) => new Set(prev).add(problemId));
     try {
       const res = await createSession(problemId);
       if (res.ok) {
         router.push(`/session/${res.data.id}`);
       } else {
         toast.error(res.error || "Could not start session");
-        setStartingProblemId(null);
+        setStartingProblemIds((prev) => { const next = new Set(prev); next.delete(problemId); return next; });
       }
     } catch {
       toast.error("Could not start session");
-      setStartingProblemId(null);
+      setStartingProblemIds((prev) => { const next = new Set(prev); next.delete(problemId); return next; });
     }
   };
 
@@ -233,15 +233,15 @@ export default function ProblemsPage() {
                 size="sm"
                 variant="ghost"
                 className="rounded-full opacity-0 group-hover:opacity-100 transition-opacity gap-1 text-xs h-7"
-                disabled={startingProblemId === problem.id}
+                disabled={startingProblemIds.has(problem.id)}
                 onClick={() => handleStart(problem.id)}
               >
-                {startingProblemId === problem.id ? (
+                {startingProblemIds.has(problem.id) ? (
                   <Loader2 className="size-3 animate-spin" />
                 ) : (
                   <PlayCircle className="size-3" />
                 )}
-                {startingProblemId === problem.id ? "Starting..." : "Start"}
+                {startingProblemIds.has(problem.id) ? "Starting..." : "Start"}
               </Button>
             </span>
           </div>
