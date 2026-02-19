@@ -1,7 +1,7 @@
 """Session request/response schemas."""
 from datetime import datetime
 from pydantic import BaseModel
-from app.schemas.problem import ProblemListEntry, ProblemRead
+from app.schemas.problem import ProblemListEntry, ProblemPublicRead
 
 
 class SessionCreate(BaseModel):
@@ -24,7 +24,7 @@ class SessionRead(BaseModel):
 
 
 class SessionWithProblem(SessionRead):
-    problem: ProblemRead | None = None
+    problem: ProblemPublicRead | None = None
 
 
 class SessionListEntry(BaseModel):

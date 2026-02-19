@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Plus,
   Variable,
@@ -16,8 +16,11 @@ import {
   CheckCircle2,
   Pencil,
   ChevronDown,
+  Loader2,
+  BookOpen,
 } from "lucide-react";
-import { SESSIONS, TEMPLATES, type Session, type Template } from "@/lib/data";
+import { TEMPLATES, type Template } from "@/lib/data";
+import { listSessions, type SessionListEntry } from "@/lib/api";
 import { AuroraBackground } from "@/components/aurora-background";
 
 /* ------------------------------------------------------------------ */
@@ -45,7 +48,7 @@ function formatRelativeDate(dateStr: string) {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function getTopicColor(topic: string) {
+function getTopicColor(topic: string | null) {
   const map: Record<string, string> = {
     "Algebra 1": "#2A7BD4",
     "Algebra 2": "#2A7BD4",
@@ -55,7 +58,7 @@ function getTopicColor(topic: string) {
     "Pre-Calc": "#ff9500",
     "Linear Algebra": "#af52de",
   };
-  return map[topic] || "#6e6e73";
+  return (topic && map[topic]) || "#6e6e73";
 }
 
 /** Deterministic SVG thumbnail path based on session id */
@@ -121,15 +124,15 @@ function TemplateCard({ template }: { template: Template }) {
 /*  Whiteboard Thumbnail Card                                          */
 /* ------------------------------------------------------------------ */
 
-function WhiteboardCard({ session }: { session: Session }) {
+function WhiteboardCard({ session }: { session: SessionListEntry }) {
   const path = getThumbnailPath(session.id);
   const color = getTopicColor(session.topic);
-  const isInProgress = session.status === "in_progress";
+  const isInProgress = session.status === "in_progress" || session.status === "not_started";
 
   return (
     <div className="group flex flex-col">
       <Link
-        href={`/session/${session.problemId}`}
+        href={`/session/${session.id}`}
         className="block"
       >
         {/* Thumbnail preview */}
@@ -181,7 +184,7 @@ function WhiteboardCard({ session }: { session: Session }) {
       <div className="flex items-center gap-2 px-3 py-2.5 border border-t-0 border-border rounded-b-md bg-card group-hover:border-primary/30 transition-colors">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-foreground truncate leading-tight">
-            {session.problemTitle}
+            {session.problem_title ?? "Untitled"}
           </p>
           <div className="flex items-center gap-1.5 mt-1">
             <span
@@ -197,12 +200,12 @@ function WhiteboardCard({ session }: { session: Session }) {
               {isInProgress ? (
                 <span className="flex items-center gap-1">
                   <Clock className="size-3 inline" />
-                  {formatRelativeDate(session.lastActivity)}
+                  {formatRelativeDate(session.updated_at)}
                 </span>
               ) : (
                 <span className="flex items-center gap-1">
                   <CheckCircle2 className="size-3 inline" />
-                  {formatRelativeDate(session.lastActivity)}
+                  {formatRelativeDate(session.updated_at)}
                 </span>
               )}
             </span>
@@ -229,26 +232,6 @@ function WhiteboardCard({ session }: { session: Session }) {
 
 type SortOption = "recent" | "name" | "topic";
 
-function sortSessions(sessions: Session[], sort: SortOption) {
-  const copy = [...sessions];
-  switch (sort) {
-    case "recent":
-      return copy.sort(
-        (a, b) =>
-          new Date(b.lastActivity).getTime() -
-          new Date(a.lastActivity).getTime()
-      );
-    case "name":
-      return copy.sort((a, b) =>
-        a.problemTitle.localeCompare(b.problemTitle)
-      );
-    case "topic":
-      return copy.sort((a, b) => a.topic.localeCompare(b.topic));
-    default:
-      return copy;
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
@@ -258,7 +241,32 @@ export default function DashboardPage() {
   const [sort, setSort] = useState<SortOption>("recent");
   const [showSortMenu, setShowSortMenu] = useState(false);
 
-  const sorted = sortSessions(SESSIONS, sort);
+  const [sessions, setSessions] = useState<SessionListEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSessions = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    listSessions(sort)
+      .then((res) => {
+        if (res.ok) {
+          setSessions(res.data);
+        } else {
+          setError(res.error);
+        }
+      })
+      .catch(() => {
+        setError("Failed to load sessions");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [sort]);
+
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
 
   const sortLabels: Record<SortOption, string> = {
     recent: "Last opened",
@@ -361,25 +369,61 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-16 text-sm text-muted-foreground gap-2">
+            <Loader2 className="size-4 animate-spin" />
+            Loading whiteboards...
+          </div>
+        )}
+
+        {/* Error */}
+        {!loading && error && (
+          <div className="flex flex-col items-center py-16 text-sm text-muted-foreground gap-3">
+            <p>{error}</p>
+            <button
+              type="button"
+              className="text-xs text-primary hover:underline"
+              onClick={fetchSessions}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Empty */}
+        {!loading && !error && sessions.length === 0 && (
+          <div className="flex flex-col items-center py-16 text-center">
+            <BookOpen className="size-8 text-muted-foreground/40 mb-3" />
+            <p className="text-sm text-muted-foreground mb-1">No whiteboards yet</p>
+            <p className="text-xs text-muted-foreground/70 mb-4">
+              Start one from the templates above or the{" "}
+              <Link href="/problems" className="text-primary hover:underline">
+                Problem Library
+              </Link>
+            </p>
+          </div>
+        )}
+
         {/* Grid view */}
-        {view === "grid" && (
+        {!loading && !error && sessions.length > 0 && view === "grid" && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {sorted.map((session) => (
+            {sessions.map((session) => (
               <WhiteboardCard key={session.id} session={session} />
             ))}
           </div>
         )}
 
         {/* List view */}
-        {view === "list" && (
+        {!loading && !error && sessions.length > 0 && view === "list" && (
           <div className="border border-border rounded-md bg-card divide-y divide-border">
-            {sorted.map((session) => {
+            {sessions.map((session) => {
               const color = getTopicColor(session.topic);
-              const isInProgress = session.status === "in_progress";
+              const isInProgress = session.status === "in_progress" || session.status === "not_started";
               return (
                 <Link
                   key={session.id}
-                  href={`/session/${session.problemId}`}
+                  href={`/session/${session.id}`}
                   className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
                 >
                   <span
@@ -393,10 +437,10 @@ export default function DashboardPage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-foreground truncate">
-                      {session.problemTitle}
+                      {session.problem_title ?? "Untitled"}
                     </p>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                      {session.topic}
+                      {session.topic ?? "—"}
                     </p>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
@@ -412,7 +456,7 @@ export default function DashboardPage() {
                       </span>
                     )}
                     <span className="text-[11px] text-muted-foreground w-16 text-right">
-                      {formatRelativeDate(session.lastActivity)}
+                      {formatRelativeDate(session.updated_at)}
                     </span>
                   </div>
                 </Link>

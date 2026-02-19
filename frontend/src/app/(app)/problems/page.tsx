@@ -1,25 +1,94 @@
 "use client";
 
-import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { PROBLEMS, TOPICS, PROBLEM_TYPES } from "@/lib/data";
-import { PlayCircle, Search } from "lucide-react";
+import { TOPICS, PROBLEM_TYPES } from "@/lib/data";
+import { getProblems, createSession, type ProblemListEntry } from "@/lib/api";
+import { PlayCircle, Search, Loader2, AlertCircle, RotateCcw } from "lucide-react";
 import { AuroraBackground } from "@/components/aurora-background";
+import { toast } from "sonner";
 
 export default function ProblemsPage() {
+  const router = useRouter();
   const [topic, setTopic] = useState("All");
   const [difficulty, setDifficulty] = useState(0);
   const [type, setType] = useState("All");
   const [search, setSearch] = useState("");
 
-  const filtered = PROBLEMS.filter((p) => {
-    if (topic !== "All" && p.topic !== topic) return false;
-    if (difficulty > 0 && p.difficulty !== difficulty) return false;
-    if (type !== "All" && p.type !== type) return false;
-    if (search && !p.title.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  const [problems, setProblems] = useState<ProblemListEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [startingProblemId, setStartingProblemId] = useState<string | null>(null);
+
+  const abortRef = useRef<AbortController | null>(null);
+
+  const apiTopic = topic === "All" ? undefined : topic;
+  const apiType = type === "All" ? undefined : type;
+  const apiDifficulty = difficulty === 0 ? undefined : difficulty;
+  const apiSearch = search.trim() || undefined;
+
+  const fetchProblems = useCallback(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setLoading(true);
+    setError(null);
+
+    getProblems(
+      { topic: apiTopic, type: apiType, difficulty: apiDifficulty, search: apiSearch },
+      controller.signal
+    )
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        if (res.ok) {
+          setProblems(res.data);
+          if (
+            res.data.length === 0 &&
+            (apiTopic || apiType || apiDifficulty || apiSearch)
+          ) {
+            console.warn(
+              "[ProblemsPage] Empty results with active filters:",
+              { topic: apiTopic, type: apiType, difficulty: apiDifficulty, search: apiSearch },
+              "Note: topic/type casing may not match backend seed data."
+            );
+          }
+        } else {
+          setError(res.error);
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setError(err?.message ?? "Failed to load problems");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+  }, [apiTopic, apiType, apiDifficulty, apiSearch]);
+
+  useEffect(() => {
+    fetchProblems();
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [fetchProblems]);
+
+  const handleStart = async (problemId: string) => {
+    setStartingProblemId(problemId);
+    try {
+      const res = await createSession(problemId);
+      if (res.ok) {
+        router.push(`/session/${res.data.id}`);
+      } else {
+        toast.error(res.error || "Could not start session");
+        setStartingProblemId(null);
+      }
+    } catch {
+      toast.error("Could not start session");
+      setStartingProblemId(null);
+    }
+  };
 
   return (
     <div className="relative max-w-5xl mx-auto px-6 py-10">
@@ -110,41 +179,73 @@ export default function ProblemsPage() {
           <span>Type</span>
           <span></span>
         </div>
-        {filtered.length === 0 ? (
+
+        {/* Loading */}
+        {loading && (
+          <div className="px-5 py-12 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Loading problems...
+          </div>
+        )}
+
+        {/* Error */}
+        {!loading && error && (
+          <div className="px-5 py-12 flex flex-col items-center gap-3 text-sm text-muted-foreground">
+            <AlertCircle className="size-5 text-red-400" />
+            <p>{error}</p>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={fetchProblems}>
+              <RotateCcw className="size-3" />
+              Retry
+            </Button>
+          </div>
+        )}
+
+        {/* Empty */}
+        {!loading && !error && problems.length === 0 && (
           <div className="px-5 py-12 text-center text-sm text-muted-foreground">
             No problems match your filters.
           </div>
-        ) : (
-          filtered.map((problem) => (
-            <Link
-              key={problem.id}
-              href={`/session/${problem.id}`}
-              className="grid grid-cols-[1fr_120px_80px_100px_80px] gap-4 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center group"
-            >
-              <span className="text-sm font-medium text-foreground truncate">{problem.title}</span>
-              <span className="text-xs text-muted-foreground">{problem.topic}</span>
-              <span className="text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-0.5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <span
-                      key={i}
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        i < problem.difficulty ? "bg-primary" : "bg-slate-200"
-                      }`}
-                    />
-                  ))}
-                </span>
-              </span>
-              <span className="text-xs text-muted-foreground">{problem.type}</span>
-              <span>
-                <Button size="sm" variant="ghost" className="rounded-full opacity-0 group-hover:opacity-100 transition-opacity gap-1 text-xs h-7">
-                  <PlayCircle className="size-3" />
-                  Start
-                </Button>
-              </span>
-            </Link>
-          ))
         )}
+
+        {/* List */}
+        {!loading && !error && problems.map((problem) => (
+          <div
+            key={problem.id}
+            className="grid grid-cols-[1fr_120px_80px_100px_80px] gap-4 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center group"
+          >
+            <span className="text-sm font-medium text-foreground truncate">{problem.title}</span>
+            <span className="text-xs text-muted-foreground">{problem.topic}</span>
+            <span className="text-xs text-muted-foreground">
+              <span className="inline-flex items-center gap-0.5">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      i < problem.difficulty ? "bg-primary" : "bg-slate-200"
+                    }`}
+                  />
+                ))}
+              </span>
+            </span>
+            <span className="text-xs text-muted-foreground">{problem.type}</span>
+            <span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="rounded-full opacity-0 group-hover:opacity-100 transition-opacity gap-1 text-xs h-7"
+                disabled={startingProblemId === problem.id}
+                onClick={() => handleStart(problem.id)}
+              >
+                {startingProblemId === problem.id ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <PlayCircle className="size-3" />
+                )}
+                {startingProblemId === problem.id ? "Starting..." : "Start"}
+              </Button>
+            </span>
+          </div>
+        ))}
       </div>
       </div>
     </div>

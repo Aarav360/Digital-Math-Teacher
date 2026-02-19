@@ -28,7 +28,8 @@ async function handleResponse<T>(res: Response): Promise<ApiResponse<T>> {
 
 export async function apiFetch<T = unknown>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  signal?: AbortSignal
 ): Promise<ApiResponse<T>> {
   const base = getApiBase();
   const url = path.startsWith("http") ? path : `${base}${path.startsWith("/") ? "" : "/"}${path}`;
@@ -40,7 +41,7 @@ export async function apiFetch<T = unknown>(
       : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers, signal });
   return handleResponse<T>(res);
 }
 
@@ -79,4 +80,98 @@ export async function loadSnapshot(
   sessionId: string
 ): Promise<ApiResponse<{ id: string; strokes_json: { strokes: unknown[]; shapes: unknown[]; textItems: unknown[]; imageItems?: unknown[] }; width: number; height: number; created_at: string }>> {
   return apiFetch(`/api/v1/sessions/${sessionId}/snapshot`);
+}
+
+/** API problem list entry — matches GET /api/v1/problems item (id, estimatedTime, topic, difficulty, type). */
+export type ProblemListEntry = {
+  id: string;
+  title: string;
+  topic: string;
+  difficulty: number;
+  type: string;
+  estimatedTime?: string | null;
+};
+
+/** API problem detail — matches GET /api/v1/problems/{id} (adds statement, created_at). */
+export type ProblemRead = ProblemListEntry & {
+  statement: string;
+  created_at?: string;
+  solution_canonical?: string;
+};
+
+/** Backend session — matches SessionRead schema. */
+export type SessionRead = {
+  id: string;
+  user_id: string;
+  problem_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Backend session with embedded problem — matches SessionWithProblem schema. */
+export type SessionWithProblem = SessionRead & {
+  problem?: ProblemRead | null;
+};
+
+/** POST /api/v1/sessions — create a new session for a problem. */
+export async function createSession(
+  problemId: string
+): Promise<ApiResponse<SessionRead>> {
+  return apiFetch("/api/v1/sessions", {
+    method: "POST",
+    body: JSON.stringify({ problem_id: problemId }),
+  });
+}
+
+/** GET /api/v1/sessions/{sessionId} — fetch session (validates ownership). */
+export async function getSession(
+  sessionId: string
+): Promise<ApiResponse<SessionWithProblem>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}`);
+}
+
+/** Backend session list entry — matches SessionListEntry schema from GET /api/v1/sessions. */
+export type SessionListEntry = {
+  id: string;
+  problem_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  problem_title: string | null;
+  topic: string | null;
+  steps_correct: number | null;
+  steps_total: number | null;
+};
+
+/** GET /api/v1/sessions — list current user's sessions. */
+export async function listSessions(
+  sort: string = "recent",
+  limit: number = 50
+): Promise<ApiResponse<SessionListEntry[]>> {
+  return apiFetch(`/api/v1/sessions?sort=${encodeURIComponent(sort)}&limit=${limit}`);
+}
+
+/** GET /api/v1/problems — list with optional filters. Returns shape 1:1 with frontend (id, estimatedTime, etc.). */
+export async function getProblems(
+  params?: {
+    topic?: string;
+    difficulty?: number;
+    type?: string;
+    search?: string;
+  },
+  signal?: AbortSignal
+): Promise<ApiResponse<ProblemListEntry[]>> {
+  const sp = new URLSearchParams();
+  if (params?.topic) sp.set("topic", params.topic);
+  if (params?.difficulty != null) sp.set("difficulty", String(params.difficulty));
+  if (params?.type) sp.set("type", params.type);
+  if (params?.search) sp.set("search", params.search);
+  const q = sp.toString();
+  return apiFetch(`/api/v1/problems${q ? `?${q}` : ""}`, {}, signal);
+}
+
+/** GET /api/v1/problems/{id} — single problem. Returns shape 1:1 with frontend (id, estimatedTime, statement, etc.). */
+export async function getProblem(id: string): Promise<ApiResponse<ProblemRead>> {
+  return apiFetch(`/api/v1/problems/${id}`);
 }

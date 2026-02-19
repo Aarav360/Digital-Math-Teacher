@@ -10,12 +10,12 @@ import {
   ArrowLeft, Loader2, MousePointer2, Lasso, BoxSelect, ChevronDown,
   Highlighter, Minus, Square, Circle, ArrowRight, Grid3X3, ImagePlus, Download,
 } from "lucide-react";
-import { PROBLEMS, MOCK_FEEDBACK, type Problem, type StepFeedback, type ChatMessage } from "@/lib/data";
+import { MOCK_FEEDBACK, type StepFeedback, type ChatMessage } from "@/lib/data";
 import { cn } from "@/lib/utils";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@/contexts/user-context";
-import { saveSnapshot, loadSnapshot } from "@/lib/api";
+import { saveSnapshot, loadSnapshot, getSession, getProblem } from "@/lib/api";
 import { toast } from "sonner";
 
 type Tool = "pen" | "eraser" | "eraserPartial" | "highlighter" | "hand" | "text" | "lasso" | "selectionBox" | "line" | "rectangle" | "circle" | "arrow";
@@ -46,7 +46,17 @@ const AUTOSAVE_DEBOUNCE_MS = 2500; // 2.5 seconds
 const MIN_TIME_BETWEEN_SAVES_MS = 2000; // 2 seconds minimum between saves
 const MIGRATION_FLAG_PREFIX = "migrated-snapshot-";
 
-const BLANK_PROBLEM: Problem = {
+type SessionProblem = {
+  id: string;
+  title: string;
+  topic: string;
+  difficulty: number;
+  type: string;
+  estimatedTime?: string | null;
+  statement: string;
+};
+
+const BLANK_PROBLEM: SessionProblem = {
   id: "blank",
   title: "Untitled Whiteboard",
   topic: "Scratch",
@@ -56,13 +66,71 @@ const BLANK_PROBLEM: Problem = {
   statement: "",
 };
 
-export default function SessionPage() {
-  const params = useParams();
+function SessionPageInner({ sessionId }: { sessionId: string }) {
   const { currentUser } = useUser();
-  const isBlank = params.id === "blank";
-  const problem = isBlank
-    ? BLANK_PROBLEM
-    : PROBLEMS.find((p) => p.id === params.id) || PROBLEMS[0];
+  const isBlank = sessionId === "blank";
+
+  const [problem, setProblem] = useState<SessionProblem | null>(isBlank ? BLANK_PROBLEM : null);
+  const [isLoadingSession, setIsLoadingSession] = useState(!isBlank);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isBlank || !sessionId) return;
+    let cancelled = false;
+    setIsLoadingSession(true);
+    setSessionError(null);
+
+    getSession(sessionId)
+      .then((sessionRes) => {
+        if (cancelled) return;
+        if (!sessionRes.ok) {
+          setSessionError(sessionRes.status === 404 ? "Session not found" : sessionRes.error);
+          setIsLoadingSession(false);
+          return;
+        }
+        const sess = sessionRes.data;
+        if (sess.problem) {
+          const p = sess.problem;
+          setProblem({
+            id: p.id,
+            title: p.title,
+            topic: p.topic,
+            difficulty: p.difficulty,
+            type: p.type,
+            estimatedTime: p.estimatedTime,
+            statement: p.statement,
+          });
+          setIsLoadingSession(false);
+        } else {
+          return getProblem(sess.problem_id).then((probRes) => {
+            if (cancelled) return;
+            if (probRes.ok) {
+              const p = probRes.data;
+              setProblem({
+                id: p.id,
+                title: p.title,
+                topic: p.topic,
+                difficulty: p.difficulty,
+                type: p.type,
+                estimatedTime: p.estimatedTime,
+                statement: p.statement,
+              });
+            } else {
+              setSessionError("Problem not found");
+            }
+            setIsLoadingSession(false);
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSessionError("Failed to load session");
+          setIsLoadingSession(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [sessionId, isBlank]);
 
   // Helper function for draft key with user_id
   const getDraftKey = useCallback((suffix: string) => {
@@ -145,7 +213,7 @@ export default function SessionPage() {
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
   // Canvas logical size (for HiDPI we use this for drawing; canvas buffer is size * dpr)
-  const canvasSizeRef = useRef({ width: 800, height: 600 });
+  const canvasSizeRef = useRef({ width: 0, height: 0 });
   // Current pan/scale for async use (e.g. place new image at view center)
   const viewTransformRef = useRef({ pan: { x: 0, y: 0 }, scale: 1 });
   viewTransformRef.current = { pan, scale };
@@ -219,14 +287,17 @@ export default function SessionPage() {
   const [clearConfirmDontAskAgain, setClearConfirmDontAskAgain] = useState(false);
 
   // Whiteboard title (Google Docs–style rename)
-  const [whiteboardTitle, setWhiteboardTitle] = useState(problem.title);
+  const [whiteboardTitle, setWhiteboardTitle] = useState(problem?.title ?? DEFAULT_WHITEBOARD_TITLE);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
-  const titleBeforeEditRef = useRef(problem.title);
+  const titleBeforeEditRef = useRef(problem?.title ?? DEFAULT_WHITEBOARD_TITLE);
 
   useEffect(() => {
-    setWhiteboardTitle(problem.title);
-  }, [problem.title]);
+    if (problem) {
+      setWhiteboardTitle(problem.title);
+      titleBeforeEditRef.current = problem.title;
+    }
+  }, [problem]);
 
   // Keep refs in sync with state for autosave
   useEffect(() => {
@@ -241,8 +312,9 @@ export default function SessionPage() {
 
   // Persistence: load from backend API on mount
   useEffect(() => {
-    const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
-    
+    // Wait for session validation before touching backend snapshots
+    if (isLoadingSession || sessionError) return;
+
     // Skip API calls for blank sessions (use localStorage only)
     if (isBlank || sessionId === "blank" || !currentUser) {
       // Fallback to localStorage for blank sessions
@@ -291,19 +363,14 @@ export default function SessionPage() {
               imageCacheRef.current.set(item.id, img);
             });
           }
-          // Update canvas size if needed
-          if (width && height) {
-            canvasSizeRef.current = { width, height };
-          }
-          // Mark as saved
-          const saved = JSON.stringify({
+          // Mark content as saved (width/height are metadata, not drawing content,
+          // so exclude them to avoid false-positive "dirty" checks when the window
+          // is resized between the snapshot save and the next autosave).
+          lastSavedRef.current = JSON.stringify({
             strokes: strokes_json.strokes || [],
             shapes: strokes_json.shapes || [],
             textItems: strokes_json.textItems || [],
-            width,
-            height,
           });
-          lastSavedRef.current = saved;
           lastSaveTimestampRef.current = Date.now();
         } else if (!result.ok && result.status === 404) {
           // No snapshot yet - check for localStorage migration
@@ -387,7 +454,7 @@ export default function SessionPage() {
       .finally(() => {
         setIsLoadingSnapshot(false);
       });
-  }, [params.id, currentUser?.id, isBlank, getDraftKey]);
+  }, [sessionId, currentUser?.id, isBlank, isLoadingSession, sessionError, getDraftKey]);
 
   // Helper function to attempt local backup
   const tryWriteLocalBackup = useCallback((sessionId: string, payload: { strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; width: number; height: number }): boolean => {
@@ -404,8 +471,11 @@ export default function SessionPage() {
 
   // Persistence: save to backend API when whiteboard state changes (debounced, excludes imageItems)
   useEffect(() => {
-    const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
-    
+    // Wait for session validation AND snapshot load before touching backend snapshots.
+    // Without the isLoadingSnapshot guard a slow network could cause the autosave timer to
+    // fire with empty state BEFORE the real snapshot arrives, silently wiping the session.
+    if (isLoadingSession || isLoadingSnapshot || sessionError) return;
+
     // Skip API calls for blank sessions (use localStorage only)
     if (isBlank || sessionId === "blank" || !currentUser) {
       // Fallback to localStorage for blank sessions
@@ -458,15 +528,15 @@ export default function SessionPage() {
     const performSave = () => {
       // Build payload and serialized from latest refs at execution time
       const { width, height } = canvasSizeRef.current;
-      const currentPayload = {
+      // Compare only drawing content (not dimensions) to avoid false-positive dirty checks
+      // when the canvas is resized between saves.
+      const serialized = JSON.stringify({
         strokes: strokesRef.current,
         shapes: shapesRef.current,
         textItems: textItemsRef.current,
-        // Exclude imageItems from autosave
-        width,
-        height,
-      };
-      const serialized = JSON.stringify(currentPayload);
+      });
+      // Full payload used for local backup fallback (includes dimensions)
+      const currentPayload = { strokes: strokesRef.current, shapes: shapesRef.current, textItems: textItemsRef.current, width, height };
       
       // Skip if identical to last saved state
       if (serialized === lastSavedRef.current) {
@@ -535,7 +605,7 @@ export default function SessionPage() {
         saveControllerRef.current = null;
       }
     };
-  }, [params.id, currentUser?.id, strokes, shapes, textItems, isBlank, getDraftKey, tryWriteLocalBackup]);
+  }, [sessionId, currentUser?.id, strokes, shapes, textItems, isBlank, isLoadingSession, isLoadingSnapshot, sessionError, getDraftKey, tryWriteLocalBackup]);
 
   useEffect(() => {
     if (isEditingTitle) {
@@ -839,7 +909,10 @@ export default function SessionPage() {
   redrawCanvasRef.current = redrawCanvas;
   useEffect(() => { redrawCanvas(); }, [redrawCanvas]);
 
-  // Resize canvas only when container size actually changes (skip when unchanged to avoid clearing canvas and redrawing with stale strokes)
+  // Resize canvas whenever the canvas element becomes available or the layout may have changed.
+  // Depends on isLoadingSession + isLoadingSnapshot so the effect re-runs once the loading gates
+  // lift and the canvas is actually in the DOM (during loading the early-return spinner means
+  // canvasRef.current is null, so the first run exits early; the second run sizes correctly).
   useEffect(() => {
     const canvas = canvasRef.current;
     const parent = canvas?.parentElement;
@@ -863,7 +936,7 @@ export default function SessionPage() {
     const ro = new ResizeObserver(updateSize);
     ro.observe(parent);
     return () => ro.disconnect();
-  }, []);
+  }, [isLoadingSession, isLoadingSnapshot]);
 
   // Force redraw when strokes change so the new stroke is visible after mouse up (in case effect order or observer cleared the canvas)
   useEffect(() => {
@@ -1407,7 +1480,7 @@ export default function SessionPage() {
 
   const handleClearClick = () => {
     const key = currentUser
-      ? `${WHITEBOARD_NO_CLEAR_WARNING_PREFIX}${currentUser.id}-${params.id ?? "blank"}`
+      ? `${WHITEBOARD_NO_CLEAR_WARNING_PREFIX}${currentUser.id}-${sessionId || "blank"}`
       : null;
     if (key && typeof window !== "undefined" && window.localStorage.getItem(key)) {
       clearAll();
@@ -1419,7 +1492,7 @@ export default function SessionPage() {
 
   const handleClearConfirmYes = () => {
     if (clearConfirmDontAskAgain && currentUser && typeof window !== "undefined") {
-      const key = `${WHITEBOARD_NO_CLEAR_WARNING_PREFIX}${currentUser.id}-${params.id ?? "blank"}`;
+      const key = `${WHITEBOARD_NO_CLEAR_WARNING_PREFIX}${currentUser.id}-${sessionId || "blank"}`;
       window.localStorage.setItem(key, "1");
     }
     clearAll();
@@ -1745,8 +1818,6 @@ export default function SessionPage() {
 
   // Simulate analysis
   const handleCheckSteps = async () => {
-    const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "blank";
-    
     // Immediate save before analysis (includes imageItems - explicit action)
     if (!isBlank && sessionId !== "blank" && currentUser) {
       // Cancel any pending debounce
@@ -1876,6 +1947,33 @@ export default function SessionPage() {
     }
   };
 
+  if (isLoadingSession) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="size-6 text-primary animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (sessionError || (!isBlank && !problem)) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <p className="text-sm text-muted-foreground">{sessionError || "Session not found"}</p>
+          <Link href="/problems">
+            <Button variant="outline" size="sm" className="gap-1.5">
+              <ArrowLeft className="size-3" />
+              Back to Problems
+            </Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("h-full w-full bg-slate-50 flex flex-col overflow-hidden", isResizing && "select-none")}>
       {/* Main container: fills space below Top Nav (nav h-14). Left column | resizer | right column. */}
@@ -1911,7 +2009,7 @@ export default function SessionPage() {
                   {whiteboardTitle || DEFAULT_WHITEBOARD_TITLE}
                 </button>
               )}
-              {!isBlank && (
+              {!isBlank && problem && (
                 <>
                   <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full shrink-0">{problem.topic}</span>
                   <span className="flex items-center gap-0.5 shrink-0">
@@ -2248,9 +2346,11 @@ export default function SessionPage() {
                 <span className="text-xs text-muted-foreground">Saving...</span>
               </div>
             )}
-            {/* Problem text pinned (hidden on blank whiteboards) */}
-            {!isBlank && (
-              <div className="absolute top-4 left-4 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs">
+            {/* Problem text pinned (hidden on blank whiteboards).
+                pointer-events-none so the overlay never captures mouse events
+                that should reach the canvas beneath it. */}
+            {!isBlank && problem && (
+              <div className="absolute top-4 left-4 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs pointer-events-none select-none">
                 <p className="text-xs text-muted-foreground mb-1">Problem</p>
                 <p className="text-sm font-medium text-foreground whitespace-pre-line">{problem.statement}</p>
               </div>
@@ -2687,4 +2787,19 @@ export default function SessionPage() {
       </div>
     </div>
   );
+}
+
+/**
+ * Thin wrapper that forces a full remount of SessionPageInner whenever the
+ * session id changes.  Without the `key` prop, Next.js App Router reuses the
+ * same component instance when navigating between /session/blank and
+ * /session/<uuid> (same route segment), so all React state – strokes, shapes,
+ * selectedStrokeIndices, isDrawing, isLoadingSession, etc. – leaks across
+ * sessions.  That stale state is the root cause of ghost scribbles, broken
+ * tools, and clunky panning in problem-based sessions.
+ */
+export default function SessionPage() {
+  const params = useParams();
+  const sessionId = Array.isArray(params.id) ? params.id[0] : params.id ?? "";
+  return <SessionPageInner key={sessionId} sessionId={sessionId} />;
 }
