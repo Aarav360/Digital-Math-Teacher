@@ -103,7 +103,8 @@ export type ProblemRead = ProblemListEntry & {
 export type SessionRead = {
   id: string;
   user_id: string;
-  problem_id: string;
+  problem_id: string | null;
+  title: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -124,6 +125,25 @@ export async function createSession(
   });
 }
 
+/** POST /api/v1/sessions — create a blank whiteboard session (no problem). */
+export async function createBlankSession(): Promise<ApiResponse<SessionRead>> {
+  return apiFetch("/api/v1/sessions", {
+    method: "POST",
+    body: JSON.stringify({ problem_id: null }),
+  });
+}
+
+/** PATCH /api/v1/sessions/{sessionId} — update the session's display title. */
+export async function updateSessionTitle(
+  sessionId: string,
+  title: string
+): Promise<ApiResponse<SessionRead>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 /** GET /api/v1/sessions/{sessionId} — fetch session (validates ownership). */
 export async function getSession(
   sessionId: string
@@ -134,7 +154,8 @@ export async function getSession(
 /** Backend session list entry — matches SessionListEntry schema from GET /api/v1/sessions. */
 export type SessionListEntry = {
   id: string;
-  problem_id: string;
+  problem_id: string | null;
+  title: string | null;
   status: string;
   created_at: string;
   updated_at: string;

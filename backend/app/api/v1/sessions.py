@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
+import sqlalchemy as sa
 
 from app.api.deps import CurrentUserId, CurrentUser, DbSession
 from app.models.session import Session, SessionStatus
@@ -16,16 +17,24 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 @router.post("", response_model=SessionRead)
 async def create_session(body: SessionCreate, user_id: CurrentUserId, db: DbSession):
-    # Verify problem exists
-    result = await db.execute(select(Problem).where(Problem.id == body.problem_id))
-    problem = result.scalar_one_or_none()
-    if problem is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Problem not found")
-    session = Session(
-        user_id=user_id,
-        problem_id=body.problem_id,
-        status=SessionStatus.NOT_STARTED,
-    )
+    if body.problem_id is None:
+        # Blank whiteboard — no problem association
+        session = Session(
+            user_id=user_id,
+            problem_id=None,
+            status=SessionStatus.NOT_STARTED,
+        )
+    else:
+        # Verify problem exists
+        result = await db.execute(select(Problem).where(Problem.id == body.problem_id))
+        problem = result.scalar_one_or_none()
+        if problem is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Problem not found")
+        session = Session(
+            user_id=user_id,
+            problem_id=body.problem_id,
+            status=SessionStatus.NOT_STARTED,
+        )
     db.add(session)
     await db.flush()
     await db.refresh(session)
@@ -40,17 +49,20 @@ async def list_sessions(
     offset: int = Query(0, ge=0),
     sort: str = Query("recent", description="recent | name | topic"),
 ):
+    # LEFT OUTER JOIN so sessions with problem_id = NULL (blank boards) are included
     q = (
         select(Session, Problem.title.label("problem_title"), Problem.topic)
-        .join(Problem, Session.problem_id == Problem.id)
+        .outerjoin(Problem, Session.problem_id == Problem.id)
         .where(Session.user_id == user_id)
     )
     if sort == "recent":
         q = q.order_by(Session.updated_at.desc())
     elif sort == "name":
-        q = q.order_by(Problem.title)
+        # COALESCE: use session's own title first, fall back to problem title
+        q = q.order_by(func.coalesce(Session.title, Problem.title))
     elif sort == "topic":
-        q = q.order_by(Problem.topic, Session.updated_at.desc())
+        # Blank sessions (no topic) sort last
+        q = q.order_by(func.coalesce(Problem.topic, sa.literal("")), Session.updated_at.desc())
     q = q.offset(offset).limit(limit)
     result = await db.execute(q)
     rows = result.all()
@@ -74,6 +86,7 @@ async def list_sessions(
             SessionListEntry(
                 id=sess.id,
                 problem_id=sess.problem_id,
+                title=sess.title,
                 status=sess.status.value,
                 created_at=sess.created_at,
                 updated_at=sess.updated_at,
@@ -105,6 +118,8 @@ async def update_session(session_id: str, body: SessionUpdate, user_id: CurrentU
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     if body.status is not None:
         session.status = SessionStatus(body.status)
+    if body.title is not None:
+        session.title = body.title.strip()[:512]
     await db.flush()
     await db.refresh(session)
     return session

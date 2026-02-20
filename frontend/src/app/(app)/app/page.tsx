@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   Plus,
   Variable,
@@ -20,8 +21,9 @@ import {
   BookOpen,
 } from "lucide-react";
 import { TEMPLATES, type Template } from "@/lib/data";
-import { listSessions, type SessionListEntry } from "@/lib/api";
+import { listSessions, createBlankSession, type SessionListEntry } from "@/lib/api";
 import { AuroraBackground } from "@/components/aurora-background";
+import { toast } from "sonner";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -83,35 +85,57 @@ function getThumbnailPath(id: string) {
 /*  Template Card                                                      */
 /* ------------------------------------------------------------------ */
 
-function TemplateCard({ template }: { template: Template }) {
+function TemplateCard({
+  template,
+  onCreateBlank,
+  isCreatingBlank,
+}: {
+  template: Template;
+  onCreateBlank: () => void;
+  isCreatingBlank: boolean;
+}) {
   const Icon = ICON_MAP[template.icon] || Plus;
   const isBlank = template.id === "t1";
-  const href = isBlank
-    ? "/session/blank"
-    : `/problems?topic=${encodeURIComponent(template.topic)}`;
+  const href = `/problems?topic=${encodeURIComponent(template.topic)}`;
+
+  if (isBlank) {
+    return (
+      <button
+        type="button"
+        onClick={onCreateBlank}
+        disabled={isCreatingBlank}
+        className="group shrink-0 flex flex-col items-center disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        <div className="w-[132px] h-[96px] rounded-md border border-border bg-card flex items-center justify-center transition-all group-hover:shadow-md overflow-hidden">
+          {isCreatingBlank ? (
+            <Loader2 className="size-6 text-muted-foreground/50 animate-spin" />
+          ) : (
+            <div className="w-12 h-12 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center group-hover:border-primary/50 transition-colors">
+              <Plus className="size-6 text-muted-foreground/50 group-hover:text-primary/60 transition-colors" />
+            </div>
+          )}
+        </div>
+        <p className="text-xs text-foreground mt-2 text-center w-[132px] truncate">
+          {template.title}
+        </p>
+      </button>
+    );
+  }
 
   return (
     <Link href={href} className="group shrink-0 flex flex-col items-center">
       <div
         className="w-[132px] h-[96px] rounded-md border border-border bg-card flex items-center justify-center transition-all group-hover:shadow-md overflow-hidden"
         style={{
-          borderColor: isBlank ? undefined : `${template.color}40`,
-          background: isBlank
-            ? undefined
-            : `linear-gradient(135deg, ${template.color}08, ${template.color}04)`,
+          borderColor: `${template.color}40`,
+          background: `linear-gradient(135deg, ${template.color}08, ${template.color}04)`,
         }}
       >
-        {isBlank ? (
-          <div className="w-12 h-12 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center group-hover:border-primary/50 transition-colors">
-            <Plus className="size-6 text-muted-foreground/50 group-hover:text-primary/60 transition-colors" />
-          </div>
-        ) : (
-          <Icon
-            className="size-7 transition-transform group-hover:scale-110"
-            style={{ color: template.color }}
-            strokeWidth={1.5}
-          />
-        )}
+        <Icon
+          className="size-7 transition-transform group-hover:scale-110"
+          style={{ color: template.color }}
+          strokeWidth={1.5}
+        />
       </div>
       <p className="text-xs text-foreground mt-2 text-center w-[132px] truncate">
         {template.title}
@@ -127,6 +151,7 @@ function TemplateCard({ template }: { template: Template }) {
 function WhiteboardCard({ session }: { session: SessionListEntry }) {
   const path = getThumbnailPath(session.id);
   const color = getTopicColor(session.topic);
+  const displayTitle = session.title ?? session.problem_title ?? "Untitled Whiteboard";
   const isInProgress = session.status === "in_progress" || session.status === "not_started";
 
   return (
@@ -184,7 +209,7 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
       <div className="flex items-center gap-2 px-3 py-2.5 border border-t-0 border-border rounded-b-md bg-card group-hover:border-primary/30 transition-colors">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium text-foreground truncate leading-tight">
-            {session.problem_title ?? "Untitled"}
+            {displayTitle}
           </p>
           <div className="flex items-center gap-1.5 mt-1">
             <span
@@ -237,9 +262,11 @@ type SortOption = "recent" | "name" | "topic";
 /* ------------------------------------------------------------------ */
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [view, setView] = useState<"grid" | "list">("grid");
   const [sort, setSort] = useState<SortOption>("recent");
   const [showSortMenu, setShowSortMenu] = useState(false);
+  const [isCreatingBlank, setIsCreatingBlank] = useState(false);
 
   const [sessions, setSessions] = useState<SessionListEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -268,6 +295,33 @@ export default function DashboardPage() {
     fetchSessions();
   }, [fetchSessions]);
 
+  // Refetch when the user switches back to this tab after being in a session
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") fetchSessions();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [fetchSessions]);
+
+  const handleCreateBlank = useCallback(async () => {
+    if (isCreatingBlank) return;
+    setIsCreatingBlank(true);
+    try {
+      const res = await createBlankSession();
+      if (res.ok) {
+        router.push(`/session/${res.data.id}`);
+        // Don't reset isCreatingBlank on success — navigation unmounts this component
+      } else {
+        toast.error("Failed to create whiteboard");
+        setIsCreatingBlank(false);
+      }
+    } catch {
+      toast.error("Failed to create whiteboard");
+      setIsCreatingBlank(false);
+    }
+  }, [isCreatingBlank, router]);
+
   const sortLabels: Record<SortOption, string> = {
     recent: "Last opened",
     name: "Name",
@@ -285,7 +339,12 @@ export default function DashboardPage() {
           </h2>
           <div className="flex gap-4 overflow-x-auto pb-1 scrollbar-none">
             {TEMPLATES.map((t) => (
-              <TemplateCard key={t.id} template={t} />
+              <TemplateCard
+                key={t.id}
+                template={t}
+                onCreateBlank={handleCreateBlank}
+                isCreatingBlank={isCreatingBlank}
+              />
             ))}
           </div>
         </div>
@@ -437,7 +496,7 @@ export default function DashboardPage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-foreground truncate">
-                      {session.problem_title ?? "Untitled"}
+                      {session.title ?? session.problem_title ?? "Untitled Whiteboard"}
                     </p>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
                       {session.topic ?? "—"}

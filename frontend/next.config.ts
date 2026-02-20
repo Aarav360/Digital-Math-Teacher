@@ -7,6 +7,15 @@ const require_ = createRequire(import.meta.url);
 const loaderPath = require_.resolve('orchids-visual-edits/loader.js');
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    return [
+      {
+        source: "/session/blank",
+        destination: "/app",
+        permanent: false, // 307 — temporary redirect; easier to change later than a 308
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {

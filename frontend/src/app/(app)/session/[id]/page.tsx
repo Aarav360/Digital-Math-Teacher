@@ -12,16 +12,17 @@ import {
 } from "lucide-react";
 import { MOCK_FEEDBACK, type StepFeedback, type ChatMessage } from "@/lib/data";
 import { cn } from "@/lib/utils";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@/contexts/user-context";
-import { saveSnapshot, loadSnapshot, getSession, getProblem } from "@/lib/api";
+import { saveSnapshot, loadSnapshot, getSession, getProblem, updateSessionTitle } from "@/lib/api";
+import { getToken, getApiBase } from "@/lib/auth";
 import { toast } from "sonner";
 
 type Tool = "pen" | "eraser" | "eraserPartial" | "highlighter" | "hand" | "text" | "lasso" | "selectionBox" | "line" | "rectangle" | "circle" | "arrow";
 type Point = { x: number; y: number };
-type Stroke = { points: Point[]; color: string; width: number; tool: "pen" | "eraser" | "eraserPartial" | "highlighter" };
-type ShapeItem = { type: "line" | "rectangle" | "circle" | "arrow"; start: Point; end: Point; color: string; width: number };
+type Stroke = { id: string; points: Point[]; color: string; width: number; tool: "pen" | "eraser" | "eraserPartial" | "highlighter" };
+type ShapeItem = { id: string; type: "line" | "rectangle" | "circle" | "arrow"; start: Point; end: Point; color: string; width: number };
 type TextItem = { id: string; x: number; y: number; text: string; color: string; fontSize: number };
 type ImageItem = { id: string; x: number; y: number; width: number; height: number; dataUrl: string };
 
@@ -66,16 +67,136 @@ const BLANK_PROBLEM: SessionProblem = {
   statement: "",
 };
 
+// ─── Chronological undo/redo ────────────────────────────────────────────────
+
+type HistoryEntry =
+  | { kind: "stroke"; item: Stroke }
+  | { kind: "shape";  item: ShapeItem }
+  | { kind: "text";   item: TextItem }
+  | { kind: "image";  item: ImageItem }
+  | { kind: "paste";  strokes: Stroke[]; shapes: ShapeItem[] };
+
+function applyUndo(
+  entry: HistoryEntry,
+  setStrokes: React.Dispatch<React.SetStateAction<Stroke[]>>,
+  setShapes: React.Dispatch<React.SetStateAction<ShapeItem[]>>,
+  setTextItems: React.Dispatch<React.SetStateAction<TextItem[]>>,
+  setImageItems: React.Dispatch<React.SetStateAction<ImageItem[]>>,
+) {
+  switch (entry.kind) {
+    case "stroke": setStrokes((prev) => prev.filter((s) => s.id !== entry.item.id)); break;
+    case "shape":  setShapes((prev) => prev.filter((s) => s.id !== entry.item.id)); break;
+    case "text":   setTextItems((prev) => prev.filter((t) => t.id !== entry.item.id)); break;
+    case "image":  setImageItems((prev) => prev.filter((i) => i.id !== entry.item.id)); break;
+    case "paste": {
+      const sIds  = new Set(entry.strokes.map((s) => s.id));
+      const shIds = new Set(entry.shapes.map((s) => s.id));
+      setStrokes((prev) => prev.filter((s) => !sIds.has(s.id)));
+      setShapes((prev) => prev.filter((s) => !shIds.has(s.id)));
+      break;
+    }
+  }
+}
+
+function applyRedo(
+  entry: HistoryEntry,
+  setStrokes: React.Dispatch<React.SetStateAction<Stroke[]>>,
+  setShapes: React.Dispatch<React.SetStateAction<ShapeItem[]>>,
+  setTextItems: React.Dispatch<React.SetStateAction<TextItem[]>>,
+  setImageItems: React.Dispatch<React.SetStateAction<ImageItem[]>>,
+  imageCacheRef: React.RefObject<Map<string, HTMLImageElement>>,
+  redrawCanvasRef: React.RefObject<() => void>,
+) {
+  switch (entry.kind) {
+    case "stroke": setStrokes((prev) => [...prev, entry.item]); break;
+    case "shape":  setShapes((prev) => [...prev, entry.item]); break;
+    case "text":   setTextItems((prev) => [...prev, entry.item]); break;
+    case "image":
+      setImageItems((prev) => [...prev, entry.item]);
+      if (!imageCacheRef.current?.has(entry.item.id)) {
+        const img = new Image();
+        img.onload = () => redrawCanvasRef.current?.();
+        img.src = entry.item.dataUrl;
+        imageCacheRef.current?.set(entry.item.id, img);
+      }
+      break;
+    case "paste":
+      setStrokes((prev) => [...prev, ...entry.strokes]);
+      setShapes((prev) => [...prev, ...entry.shapes]);
+      break;
+  }
+}
+
+function useWhiteboardHistory(
+  setStrokes: React.Dispatch<React.SetStateAction<Stroke[]>>,
+  setShapes: React.Dispatch<React.SetStateAction<ShapeItem[]>>,
+  setTextItems: React.Dispatch<React.SetStateAction<TextItem[]>>,
+  setImageItems: React.Dispatch<React.SetStateAction<ImageItem[]>>,
+  imageCacheRef: React.RefObject<Map<string, HTMLImageElement>>,
+  redrawCanvasRef: React.RefObject<() => void>,
+) {
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [future, setFuture]   = useState<HistoryEntry[]>([]);
+  const seqRef = useRef(0);
+  const nextId = useCallback(() => `item-${++seqRef.current}`, []);
+
+  const recordAdd = useCallback((entry: HistoryEntry) => {
+    setHistory((prev) => [...prev, entry]);
+    setFuture([]);
+  }, []);
+
+  const recordDelete = useCallback(() => {
+    setFuture([]);
+  }, []);
+
+  const recordPaste = useCallback((entry: Extract<HistoryEntry, { kind: "paste" }>) => {
+    setHistory((prev) => [...prev, entry]);
+    setFuture([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    setHistory((prev) => {
+      if (prev.length === 0) return prev;
+      const entry = prev[prev.length - 1];
+      setFuture((f) => [...f, entry]);
+      applyUndo(entry, setStrokes, setShapes, setTextItems, setImageItems);
+      return prev.slice(0, -1);
+    });
+  }, [setStrokes, setShapes, setTextItems, setImageItems]);
+
+  const redo = useCallback(() => {
+    setFuture((prev) => {
+      if (prev.length === 0) return prev;
+      const entry = prev[prev.length - 1];
+      setHistory((h) => [...h, entry]);
+      applyRedo(entry, setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, redrawCanvasRef);
+      return prev.slice(0, -1);
+    });
+  }, [setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, redrawCanvasRef]);
+
+  const resetHistory = useCallback(() => {
+    setHistory([]);
+    setFuture([]);
+  }, []);
+
+  return { nextId, recordAdd, recordDelete, recordPaste, undo, redo, resetHistory };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 function SessionPageInner({ sessionId }: { sessionId: string }) {
   const { currentUser } = useUser();
-  const isBlank = sessionId === "blank";
+  const router = useRouter();
 
-  const [problem, setProblem] = useState<SessionProblem | null>(isBlank ? BLANK_PROBLEM : null);
-  const [isLoadingSession, setIsLoadingSession] = useState(!isBlank);
+  // isBlank is derived from the loaded session (problem_id == null), not the URL
+  const [isBlank, setIsBlank] = useState(false);
+
+  const [problem, setProblem] = useState<SessionProblem | null>(null);
+  const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isBlank || !sessionId) return;
+    if (!sessionId) return;
     let cancelled = false;
     setIsLoadingSession(true);
     setSessionError(null);
@@ -89,7 +210,36 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
           return;
         }
         const sess = sessionRes.data;
-        if (sess.problem) {
+
+        // Set title state before setProblem() to prevent problem sync effect override (R4)
+        const initialTitle = sess.title ?? sess.problem?.title ?? DEFAULT_WHITEBOARD_TITLE;
+        setWhiteboardTitle(initialTitle);
+        titleSavedRef.current = initialTitle;
+        titleLoadedRef.current = true;
+
+        if (!sess.problem_id) {
+          // Blank session — no problem association
+          setIsBlank(true);
+          setIsLoadingSession(false);
+
+          // One-time migration: if user had data in the old localStorage blank key, migrate it
+          if (currentUser?.id && typeof window !== "undefined") {
+            const oldKey = `${WHITEBOARD_STORAGE_KEY_PREFIX}${currentUser.id}-blank`;
+            try {
+              const raw = window.localStorage.getItem(oldKey);
+              if (raw) {
+                const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
+                // Only migrate if the session has no snapshot yet (checked after snapshot load)
+                // Store the data in a pending migration ref so snapshot load can use it
+                pendingBlankMigrationRef.current = data;
+                window.localStorage.removeItem(oldKey);
+              }
+            } catch {
+              // Ignore invalid old data
+            }
+          }
+        } else if (sess.problem) {
+          // Problem embedded in session response
           const p = sess.problem;
           setProblem({
             id: p.id,
@@ -101,10 +251,8 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
             statement: p.statement,
           });
           setIsLoadingSession(false);
-        } else if (!sess.problem_id) {
-          setSessionError("Problem not found");
-          setIsLoadingSession(false);
         } else {
+          // problem_id present but not embedded — fetch separately
           return getProblem(sess.problem_id).then((probRes) => {
             if (cancelled) return;
             if (probRes.ok) {
@@ -133,13 +281,19 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       });
 
     return () => { cancelled = true; };
-  }, [sessionId, isBlank]);
+  }, [sessionId, currentUser?.id]);
 
   // Helper function for draft key with user_id
   const getDraftKey = useCallback((suffix: string) => {
     if (!currentUser) return null; // Don't load/save if no user
     return `${WHITEBOARD_STORAGE_KEY_PREFIX}${currentUser.id}-${suffix}`;
   }, [currentUser]);
+
+  // Tracks component mount state so autosave cleanup doesn't cancel saves on unmount (AppNav navigation)
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   // Snapshot persistence state
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
@@ -149,11 +303,14 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   const saveControllerRef = useRef<AbortController | null>(null);
   const pendingSaveRef = useRef<NodeJS.Timeout | null>(null);
   const migrationAttemptedRef = useRef<boolean>(false);
-  
+  // Holds old localStorage blank board data pending migration to the backend
+  const pendingBlankMigrationRef = useRef<{ strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] } | null>(null);
+
   // Refs for latest state values (to avoid stale closures in autosave)
   const strokesRef = useRef<Stroke[]>([]);
   const shapesRef = useRef<ShapeItem[]>([]);
   const textItemsRef = useRef<TextItem[]>([]);
+  const imageItemsRef = useRef<ImageItem[]>([]);
 
   // Canvas state
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -161,7 +318,6 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   const [penColor, setPenColor] = useState(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(2);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [undoneStrokes, setUndoneStrokes] = useState<Stroke[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
   const currentStroke = useRef<Point[]>([]);
 
@@ -205,8 +361,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   // Shapes (line, rectangle, circle, arrow)
   const [shapes, setShapes] = useState<ShapeItem[]>([]);
-  const [undoneShapes, setUndoneShapes] = useState<ShapeItem[]>([]);
-  const [previewShape, setPreviewShape] = useState<ShapeItem | null>(null);
+  const [previewShape, setPreviewShape] = useState<Omit<ShapeItem, "id"> | null>(null);
   const shapeStartRef = useRef<Point | null>(null);
 
   // Zoom & pan (view transform: world = (screen - pan) / scale, screen = world * scale + pan)
@@ -224,8 +379,6 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   // Text and image layers
   const [textItems, setTextItems] = useState<TextItem[]>([]);
   const [imageItems, setImageItems] = useState<ImageItem[]>([]);
-  const [undoneTextItems, setUndoneTextItems] = useState<TextItem[]>([]);
-  const [undoneImageItems, setUndoneImageItems] = useState<ImageItem[]>([]);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Text tool overlay: { x, y } in world coords; id + initialText when editing existing
@@ -278,6 +431,10 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   const isSelectingRef = useRef(false);
 
   const redrawCanvasRef = useRef<() => void>(() => {});
+
+  const { nextId, recordAdd, recordDelete, recordPaste, undo, redo, resetHistory } =
+    useWhiteboardHistory(setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, redrawCanvasRef);
+
   const selectionRef = useRef<{ strokes: Set<number>; shapes: Set<number> }>({ strokes: new Set(), shapes: new Set() });
   selectionRef.current = { strokes: selectedStrokeIndices, shapes: selectedShapeIndices };
 
@@ -290,13 +447,19 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   const [clearConfirmDontAskAgain, setClearConfirmDontAskAgain] = useState(false);
 
   // Whiteboard title (Google Docs–style rename)
-  const [whiteboardTitle, setWhiteboardTitle] = useState(problem?.title ?? DEFAULT_WHITEBOARD_TITLE);
+  // Initial value is overwritten by the session-load effect once data arrives
+  const [whiteboardTitle, setWhiteboardTitle] = useState(DEFAULT_WHITEBOARD_TITLE);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
-  const titleBeforeEditRef = useRef(problem?.title ?? DEFAULT_WHITEBOARD_TITLE);
+  const titleBeforeEditRef = useRef(DEFAULT_WHITEBOARD_TITLE);
+  // titleLoadedRef prevents the problem sync effect from overwriting a user-set title (R4)
+  const titleLoadedRef = useRef(false);
+  // titleSavedRef tracks the last successfully persisted title for flush-on-exit (R5)
+  const titleSavedRef = useRef(DEFAULT_WHITEBOARD_TITLE);
 
   useEffect(() => {
-    if (problem) {
+    // Only allow problem to reset the title before the session has loaded its own title
+    if (!titleLoadedRef.current && problem) {
       setWhiteboardTitle(problem.title);
       titleBeforeEditRef.current = problem.title;
     }
@@ -312,23 +475,32 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     textItemsRef.current = textItems;
   }, [textItems]);
+  useEffect(() => {
+    imageItemsRef.current = imageItems;
+  }, [imageItems]);
 
   // Persistence: load from backend API on mount
   useEffect(() => {
     // Wait for session validation before touching backend snapshots
     if (isLoadingSession || sessionError) return;
 
-    // Skip API calls for blank sessions (use localStorage only)
-    if (isBlank || sessionId === "blank" || !currentUser) {
-      // Fallback to localStorage for blank sessions
+    // All sessions (including blank) now load from and save to the backend.
+    // localStorage is only used as a 500-error fallback via tryWriteLocalBackup.
+    if (!currentUser) {
+      // No user yet — nothing to load
+      return;
+    }
+
+    if (false) {
+      // Unreachable block kept as a structural placeholder — removed old localStorage-only path
       const key = getDraftKey(sessionId);
       if (key) {
         try {
           const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
           if (raw) {
             const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
-            if (data.strokes?.length) setStrokes(data.strokes);
-            if (data.shapes?.length) setShapes(data.shapes);
+            if (data.strokes?.length) setStrokes((data.strokes as Array<Stroke & { id?: string }>).map((s, i) => ({ ...s, id: s.id ?? `loaded-stroke-${i}` })));
+            if (data.shapes?.length) setShapes((data.shapes as Array<ShapeItem & { id?: string }>).map((s, i) => ({ ...s, id: s.id ?? `loaded-shape-${i}` })));
             if (data.textItems?.length) setTextItems(data.textItems);
             if (data.imageItems?.length) {
               setImageItems(data.imageItems);
@@ -353,8 +525,12 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       .then((result) => {
         if (result.ok && result.data) {
           const { strokes_json, width, height } = result.data;
-          if (strokes_json.strokes?.length) setStrokes(strokes_json.strokes as Stroke[]);
-          if (strokes_json.shapes?.length) setShapes(strokes_json.shapes as ShapeItem[]);
+          if (strokes_json.strokes?.length)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setStrokes((strokes_json.strokes as Array<any>).map((s, i) => ({ ...s, id: s.id ?? `loaded-stroke-${i}` })) as Stroke[]);
+          if (strokes_json.shapes?.length)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setShapes((strokes_json.shapes as Array<any>).map((s, i) => ({ ...s, id: s.id ?? `loaded-shape-${i}` })) as ShapeItem[]);
           if (strokes_json.textItems?.length) setTextItems(strokes_json.textItems as TextItem[]);
           if (strokes_json.imageItems?.length) {
             const imageItemsArray = strokes_json.imageItems as ImageItem[];
@@ -376,78 +552,70 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
           });
           lastSaveTimestampRef.current = Date.now();
         } else if (!result.ok && result.status === 404) {
-          // No snapshot yet - check for localStorage migration
-          // Guard against null currentUser before computing migrationFlagKey
-          if (!currentUser?.id) {
-            return;
-          }
-          
-          const key = getDraftKey(sessionId);
-          const migrationFlagKey = `${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`;
-          
-          if (key && !migrationAttemptedRef.current && typeof window !== "undefined") {
-            const hasMigrationFlag = window.localStorage.getItem(migrationFlagKey);
-            if (!hasMigrationFlag) {
-              try {
-                const raw = window.localStorage.getItem(key);
-                if (raw) {
-                  const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
-                  if (data.strokes || data.shapes || data.textItems || data.imageItems) {
-                    // Immediately populate UI state with parsed data
-                    if (data.strokes?.length) setStrokes(data.strokes);
-                    if (data.shapes?.length) setShapes(data.shapes);
-                    if (data.textItems?.length) setTextItems(data.textItems);
-                    if (data.imageItems?.length) {
-                      const imageItemsArray = data.imageItems;
-                      setImageItems(imageItemsArray);
-                      imageItemsArray.forEach((item) => {
-                        const img = new Image();
-                        img.onload = () => redrawCanvasRef.current();
-                        img.src = item.dataUrl;
-                        imageCacheRef.current.set(item.id, img);
-                      });
-                    }
-                    
-                    // Mark migration as attempted
-                    migrationAttemptedRef.current = true;
-                    
-                    // Attempt background migration
-                    const { width, height } = canvasSizeRef.current;
-                    saveSnapshot(sessionId, {
-                      strokes_json: {
-                        strokes: data.strokes || [],
-                        shapes: data.shapes || [],
-                        textItems: data.textItems || [],
-                        imageItems: data.imageItems || [],
-                      },
-                      width,
-                      height,
-                    })
-                      .then((migrateResult) => {
-                        if (migrateResult.ok) {
-                          // Clear localStorage and set flag only on success
-                          window.localStorage.removeItem(key);
-                          window.localStorage.setItem(migrationFlagKey, "1");
-                          toast.success("Draft migrated to cloud");
-                        } else {
-                          // On failure, leave localStorage untouched and show error
-                          console.error("Failed to migrate draft:", migrateResult.error || "Unknown error");
-                          toast.error("Failed to migrate draft. Your work is still saved locally.");
-                        }
-                      })
-                      .catch((err) => {
-                        // On error, leave localStorage untouched and show error
-                        console.error("Error migrating draft:", err);
-                        toast.error("Failed to migrate draft. Your work is still saved locally.");
-                      });
-                  }
-                }
-              } catch (err) {
-                // Log and show user-facing error, leave localStorage untouched
-                console.error("Error parsing local draft:", err);
-                toast.error("Failed to load local draft. Please refresh the page.");
-              }
+          // No snapshot yet. Check for two migration sources:
+          // 1. Old localStorage draft for this session ID
+          // 2. Old blank-board localStorage data captured in session-load (pendingBlankMigrationRef)
+          if (!currentUser?.id) return;
+
+          const data = (() => {
+            // Prefer pending blank migration data captured during session load
+            if (pendingBlankMigrationRef.current) {
+              const d = pendingBlankMigrationRef.current;
+              pendingBlankMigrationRef.current = null;
+              return d;
             }
+            // Fall back to old per-session localStorage draft
+            const key = getDraftKey(sessionId);
+            const migrationFlagKey = `${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`;
+            if (!key || !migrationAttemptedRef.current === false || typeof window === "undefined") return null;
+            if (window.localStorage.getItem(migrationFlagKey)) return null;
+            try {
+              const raw = window.localStorage.getItem(key);
+              return raw ? (JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] }) : null;
+            } catch { return null; }
+          })();
+
+          if (data && (data.strokes || data.shapes || data.textItems || data.imageItems)) {
+            if (data.strokes?.length) setStrokes((data.strokes as Array<Stroke & { id?: string }>).map((s, i) => ({ ...s, id: s.id ?? `loaded-stroke-${i}` })));
+            if (data.shapes?.length) setShapes((data.shapes as Array<ShapeItem & { id?: string }>).map((s, i) => ({ ...s, id: s.id ?? `loaded-shape-${i}` })));
+            if (data.textItems?.length) setTextItems(data.textItems);
+            if (data.imageItems?.length) {
+              const imageItemsArray = data.imageItems;
+              setImageItems(imageItemsArray);
+              imageItemsArray.forEach((item) => {
+                const img = new Image();
+                img.onload = () => redrawCanvasRef.current();
+                img.src = item.dataUrl;
+                imageCacheRef.current.set(item.id, img);
+              });
+            }
+            migrationAttemptedRef.current = true;
+            const { width, height } = canvasSizeRef.current;
+            saveSnapshot(sessionId, {
+              strokes_json: {
+                strokes: data.strokes || [],
+                shapes: data.shapes || [],
+                textItems: data.textItems || [],
+                imageItems: data.imageItems || [],
+              },
+              width,
+              height,
+            })
+              .then((migrateResult) => {
+                if (migrateResult.ok) {
+                  const key = getDraftKey(sessionId);
+                  if (key) window.localStorage.removeItem(key);
+                  window.localStorage.setItem(`${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`, "1");
+                  toast.success("Draft migrated to cloud");
+                } else {
+                  console.error("Failed to migrate draft:", migrateResult.error);
+                  toast.error("Failed to migrate draft. Your work is still saved locally.");
+                }
+              })
+              .catch((err) => {
+                console.error("Error migrating draft:", err);
+                toast.error("Failed to migrate draft. Your work is still saved locally.");
+              });
           }
         }
       })
@@ -457,7 +625,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       .finally(() => {
         setIsLoadingSnapshot(false);
       });
-  }, [sessionId, currentUser?.id, isBlank, isLoadingSession, sessionError, getDraftKey]);
+  }, [sessionId, currentUser?.id, isLoadingSession, sessionError, getDraftKey]);
 
   // Helper function to attempt local backup
   const tryWriteLocalBackup = useCallback((sessionId: string, payload: { strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; width: number; height: number }): boolean => {
@@ -479,21 +647,8 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     // fire with empty state BEFORE the real snapshot arrives, silently wiping the session.
     if (isLoadingSession || isLoadingSnapshot || sessionError) return;
 
-    // Skip API calls for blank sessions (use localStorage only)
-    if (isBlank || sessionId === "blank" || !currentUser) {
-      // Fallback to localStorage for blank sessions
-      const key = getDraftKey(sessionId);
-      if (!key) return;
-      const t = setTimeout(() => {
-        try {
-          const payload = { strokes, shapes, textItems, imageItems };
-          window.localStorage.setItem(key, JSON.stringify(payload));
-        } catch {
-          // quota or disabled
-        }
-      }, PERSIST_DEBOUNCE_MS);
-      return () => clearTimeout(t);
-    }
+    // All sessions (blank and problem) now save to the backend
+    if (!currentUser) return;
 
     // Cancel previous debounce timer before scheduling new one
     if (pendingSaveRef.current) {
@@ -599,6 +754,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     };
 
     return () => {
+      // On unmount (AppNav or any navigation), let the pending timer fire naturally
+      // so the final autosave completes. Only cancel during re-renders (effect re-runs).
+      if (!isMountedRef.current) return;
       if (pendingSaveRef.current) {
         clearTimeout(pendingSaveRef.current);
         pendingSaveRef.current = null;
@@ -608,7 +766,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
         saveControllerRef.current = null;
       }
     };
-  }, [sessionId, currentUser?.id, strokes, shapes, textItems, isBlank, isLoadingSession, isLoadingSnapshot, sessionError, getDraftKey, tryWriteLocalBackup]);
+  }, [sessionId, currentUser?.id, strokes, shapes, textItems, isLoadingSession, isLoadingSnapshot, sessionError, tryWriteLocalBackup]);
 
   useEffect(() => {
     if (isEditingTitle) {
@@ -619,15 +777,100 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   }, [isEditingTitle]);
 
   const saveTitle = useCallback(() => {
-    const trimmed = whiteboardTitle.trim();
-    setWhiteboardTitle(trimmed || DEFAULT_WHITEBOARD_TITLE);
+    const trimmed = whiteboardTitle.trim() || DEFAULT_WHITEBOARD_TITLE;
+    setWhiteboardTitle(trimmed);
     setIsEditingTitle(false);
-  }, [whiteboardTitle]);
+    if (sessionId) {
+      updateSessionTitle(sessionId, trimmed).then((res) => {
+        if (res.ok) {
+          titleSavedRef.current = trimmed;
+        } else {
+          toast.error("Failed to save title");
+        }
+      });
+    }
+  }, [whiteboardTitle, sessionId]);
 
   const cancelTitleEdit = useCallback(() => {
     setWhiteboardTitle(titleBeforeEditRef.current);
     setIsEditingTitle(false);
   }, []);
+
+  const handleBackNavigation = useCallback(async () => {
+    if (sessionId && currentUser) {
+      // 1. Flush pending title save (R5) — the fire-and-forget PATCH from saveTitle may still
+      //    be in-flight without keepalive and would be canceled on unmount.
+      const currentTitle = whiteboardTitle.trim() || DEFAULT_WHITEBOARD_TITLE;
+      if (currentTitle !== titleSavedRef.current) {
+        try { await updateSessionTitle(sessionId, currentTitle); } catch { /* best effort */ }
+      }
+
+      // 2. Cancel pending snapshot debounce and abort in-flight snapshot save.
+      //    handleBackNavigation fires its own save, so we don't need the debounce.
+      if (pendingSaveRef.current) {
+        clearTimeout(pendingSaveRef.current);
+        pendingSaveRef.current = null;
+      }
+      if (saveControllerRef.current) {
+        saveControllerRef.current.abort();
+        saveControllerRef.current = null;
+      }
+
+      // 3. Dirty check — separate strokes/text check from image presence (R7).
+      //    lastSavedRef excludes imageItems (matching autosave), so image-only changes
+      //    would pass the serialized check. Guard with hasImages separately.
+      const serialized = JSON.stringify({
+        strokes: strokesRef.current,
+        shapes: shapesRef.current,
+        textItems: textItemsRef.current,
+      });
+      const strokesDirty = serialized !== lastSavedRef.current;
+      const hasImages = imageItemsRef.current.length > 0;
+
+      if (strokesDirty || hasImages) {
+        const { width, height } = canvasSizeRef.current;
+        const payload = {
+          strokes_json: {
+            strokes: strokesRef.current,
+            shapes: shapesRef.current,
+            textItems: textItemsRef.current,
+            imageItems: imageItemsRef.current, // always include on explicit exit
+          },
+          width,
+          height,
+        };
+
+        // 4. Use keepalive fetch for small payloads (survives navigation).
+        //    Fall back to awaited save for large payloads (R6 — 45KB threshold).
+        const KEEPALIVE_LIMIT = 45 * 1024;
+        const byteLength = new TextEncoder().encode(JSON.stringify(payload)).length;
+
+        if (byteLength <= KEEPALIVE_LIMIT) {
+          const token = getToken();
+          fetch(`${getApiBase()}/api/v1/sessions/${sessionId}/snapshot`, {
+            method: "PUT",
+            keepalive: true,
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(payload),
+          });
+          // Fire-and-forget — browser completes this after navigation
+        } else {
+          try {
+            await saveSnapshot(sessionId, payload);
+          } catch (err) {
+            console.error("Exit snapshot failed (payload > 45KB):", err);
+          }
+        }
+      }
+    }
+
+    // 5. Navigate and invalidate dashboard cache (R10)
+    router.push("/app");
+    router.refresh();
+  }, [sessionId, currentUser, whiteboardTitle, router]);
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -972,14 +1215,12 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       }
     } else if (value) {
       const baselineOffset = 14;
-      setTextItems((prev) => [
-        ...prev,
-        { id: Date.now().toString(), x: textEditState.x, y: textEditState.y + baselineOffset, text: value, color: penColor, fontSize: 16 },
-      ]);
-      setUndoneTextItems([]);
+      const newText: TextItem = { id: Date.now().toString(), x: textEditState.x, y: textEditState.y + baselineOffset, text: value, color: penColor, fontSize: 16 };
+      setTextItems((prev) => [...prev, newText]);
+      recordAdd({ kind: "text", item: newText });
     }
     setTextEditState(null);
-  }, [textEditState, penColor]);
+  }, [textEditState, penColor, recordAdd]);
 
   const getPos = useCallback((clientX: number, clientY: number): Point => {
     const canvas = canvasRef.current;
@@ -1344,8 +1585,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     }
     if (tool === "line" || tool === "rectangle" || tool === "circle" || tool === "arrow") {
       if (previewShape) {
-        setShapes((prev) => [...prev, { ...previewShape }]);
-        setUndoneShapes([]);
+        const newShape: ShapeItem = { id: nextId(), ...previewShape };
+        setShapes((prev) => [...prev, newShape]);
+        recordAdd({ kind: "shape", item: newShape });
       }
       setPreviewShape(null);
       shapeStartRef.current = null;
@@ -1358,15 +1600,13 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
         const eraserRadius = penWidth * 5;
         const toRemove = getStrokesUnderEraser(currentStroke.current, eraserRadius, strokes);
         setStrokes((prev) => prev.filter((_, i) => !toRemove.has(i)));
-        setUndoneStrokes([]);
+        recordDelete();
       }
     } else if (currentStroke.current.length > 1) {
       const pointsToAdd = [...currentStroke.current];
-      setStrokes((prev) => [
-        ...prev,
-        { points: pointsToAdd, color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
-      ]);
-      setUndoneStrokes([]);
+      const newStroke: Stroke = { id: nextId(), points: pointsToAdd, color: penColor, width: penWidth, tool: tool as Stroke["tool"] };
+      setStrokes((prev) => [...prev, newStroke]);
+      recordAdd({ kind: "stroke", item: newStroke });
     }
     currentStroke.current = [];
     resetIdleTimer();
@@ -1394,83 +1634,23 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       const eraserRadius = penWidth * 5;
       const toRemove = getStrokesUnderEraser(currentStroke.current, eraserRadius, strokes);
       setStrokes((prev) => prev.filter((_, i) => !toRemove.has(i)));
-      setUndoneStrokes([]);
+      recordDelete();
     } else if (currentStroke.current.length > 1) {
-      setStrokes((prev) => [
-        ...prev,
-        { points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as "pen" | "eraser" | "eraserPartial" | "highlighter" },
-      ]);
-      setUndoneStrokes([]);
+      const newStroke: Stroke = { id: nextId(), points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as Stroke["tool"] };
+      setStrokes((prev) => [...prev, newStroke]);
+      recordAdd({ kind: "stroke", item: newStroke });
     }
     currentStroke.current = [];
     resetIdleTimer();
   };
 
-  const undo = useCallback(() => {
-    if (strokes.length > 0) {
-      setStrokes((prev) => {
-        const last = prev[prev.length - 1];
-        setUndoneStrokes((u) => [...u, last]);
-        return prev.slice(0, -1);
-      });
-    } else if (shapes.length > 0) {
-      setShapes((prev) => {
-        const last = prev[prev.length - 1];
-        setUndoneShapes((u) => [...u, last]);
-        return prev.slice(0, -1);
-      });
-    } else if (textItems.length > 0) {
-      setTextItems((prev) => {
-        const last = prev[prev.length - 1];
-        setUndoneTextItems((u) => [...u, last]);
-        return prev.slice(0, -1);
-      });
-    } else if (imageItems.length > 0) {
-      setImageItems((prev) => {
-        const last = prev[prev.length - 1];
-        setUndoneImageItems((u) => [...u, last]);
-        return prev.slice(0, -1);
-      });
-    }
-  }, [strokes.length, shapes.length, textItems.length, imageItems.length]);
-
-  const redo = useCallback(() => {
-    if (undoneStrokes.length > 0) {
-      setUndoneStrokes((prev) => {
-        const last = prev[prev.length - 1];
-        setStrokes((s) => [...s, last]);
-        return prev.slice(0, -1);
-      });
-    } else if (undoneShapes.length > 0) {
-      setUndoneShapes((prev) => {
-        const last = prev[prev.length - 1];
-        setShapes((s) => [...s, last]);
-        return prev.slice(0, -1);
-      });
-    } else if (undoneTextItems.length > 0) {
-      setUndoneTextItems((prev) => {
-        const last = prev[prev.length - 1];
-        setTextItems((t) => [...t, last]);
-        return prev.slice(0, -1);
-      });
-    } else if (undoneImageItems.length > 0) {
-      setUndoneImageItems((prev) => {
-        const last = prev[prev.length - 1];
-        setImageItems((i) => [...i, last]);
-        return prev.slice(0, -1);
-      });
-    }
-  }, [undoneStrokes.length, undoneShapes.length, undoneTextItems.length, undoneImageItems.length]);
 
   const clearAll = () => {
     setStrokes([]);
-    setUndoneStrokes([]);
     setShapes([]);
-    setUndoneShapes([]);
     setTextItems([]);
-    setUndoneTextItems([]);
     setImageItems([]);
-    setUndoneImageItems([]);
+    resetHistory();
     imageCacheRef.current.clear();
     setSelectedImageId(null);
     setResizingImageId(null);
@@ -1512,6 +1692,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     setShapes((prev) => prev.filter((_, i) => !selectedShapeIndices.has(i)));
     setSelectedStrokeIndices(new Set());
     setSelectedShapeIndices(new Set());
+    recordDelete();
   };
 
   const copySelection = useCallback(() => {
@@ -1554,10 +1735,12 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     const dy = pasteCenter.y - centroid.y;
     const newStrokes: Stroke[] = clip.strokes.map((s) => ({
       ...s,
+      id: nextId(),
       points: s.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
     }));
     const newShapes: ShapeItem[] = clip.shapes.map((s) => ({
       ...s,
+      id: nextId(),
       start: { x: s.start.x + dx, y: s.start.y + dy },
       end: { x: s.end.x + dx, y: s.end.y + dy },
     }));
@@ -1565,11 +1748,10 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     const baseShape = shapes.length;
     setStrokes((prev) => [...prev, ...newStrokes]);
     setShapes((prev) => [...prev, ...newShapes]);
-    setUndoneStrokes([]);
-    setUndoneShapes([]);
+    recordPaste({ kind: "paste", strokes: newStrokes, shapes: newShapes });
     setSelectedStrokeIndices(new Set(Array.from({ length: newStrokes.length }, (_, i) => baseStroke + i)));
     setSelectedShapeIndices(new Set(Array.from({ length: newShapes.length }, (_, i) => baseShape + i)));
-  }, [pan.x, pan.y, scale, strokes.length, shapes.length]);
+  }, [pan.x, pan.y, scale, strokes.length, shapes.length, nextId, recordPaste]);
 
   // When clear-confirm dialog is open, handle Enter (Yes) and Escape (No)
   useEffect(() => {
@@ -1609,6 +1791,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
           e.preventDefault();
           setImageItems((prev) => prev.filter((i) => i.id !== selectedImageId));
           setSelectedImageId(null);
+          recordDelete();
         } else {
           const { strokes: si, shapes: sh } = selectionRef.current;
           if (si.size > 0 || sh.size > 0) {
@@ -1617,6 +1800,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
             setShapes((prev) => prev.filter((_, i) => !sh.has(i)));
             setSelectedStrokeIndices(new Set());
             setSelectedShapeIndices(new Set());
+            recordDelete();
           }
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
@@ -1804,7 +1988,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
         const newItem: ImageItem = { id, x, y, width: w, height: h, dataUrl };
         imageCacheRef.current.set(id, img);
         setImageItems((prev) => [...prev, newItem]);
-        setUndoneImageItems([]);
+        recordAdd({ kind: "image", item: newItem });
         setTimeout(() => redrawCanvasRef.current(), 0);
       };
       img.onerror = () => {
@@ -1822,7 +2006,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   // Simulate analysis
   const handleCheckSteps = async () => {
     // Immediate save before analysis (includes imageItems - explicit action)
-    if (!isBlank && sessionId !== "blank" && currentUser) {
+    if (!isBlank && currentUser) {
       // Cancel any pending debounce
       if (pendingSaveRef.current) {
         clearTimeout(pendingSaveRef.current);
@@ -1961,7 +2145,7 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     );
   }
 
-  if (sessionError || (!isBlank && !problem)) {
+  if (sessionError || (!isBlank && !problem && !isLoadingSession)) {
     return (
       <div className="h-full w-full flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center gap-4 text-center">
@@ -1985,11 +2169,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Untitled Whiteboard header (inside left column only) – Google Docs–style rename */}
           <div className="h-12 border-b border-slate-200 bg-white/80 backdrop-blur-xl flex items-center px-4 gap-4 shrink-0 z-10">
-            <Link href="/app">
-              <Button variant="ghost" size="icon-sm" className="rounded-full">
-                <ArrowLeft className="size-4" />
-              </Button>
-            </Link>
+            <Button variant="ghost" size="icon-sm" className="rounded-full" onClick={handleBackNavigation}>
+              <ArrowLeft className="size-4" />
+            </Button>
             <div className="flex items-center gap-3 min-w-0 flex-1">
               {isEditingTitle ? (
                 <input
@@ -2023,8 +2205,8 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
                 </>
               )}
               {isBlank && (
-                <span className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full shrink-0 border border-amber-200">
-                  Local scratchpad; not saved to your account
+                <span className="px-2 py-0.5 bg-secondary text-muted-foreground text-xs rounded-full shrink-0 border border-border">
+                  Free Whiteboard
                 </span>
               )}
             </div>
