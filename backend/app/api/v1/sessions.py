@@ -61,8 +61,12 @@ async def list_sessions(
         # COALESCE: use session's own title first, fall back to problem title
         q = q.order_by(func.coalesce(Session.title, Problem.title))
     elif sort == "topic":
-        # Blank sessions (no topic) sort last
-        q = q.order_by(func.coalesce(Problem.topic, sa.literal("")), Session.updated_at.desc())
+        # Blank sessions (no topic) sort last; use CASE to push empty strings after real topics
+        q = q.order_by(
+            sa.case((sa.or_(Problem.topic == sa.literal(""), Problem.topic.is_(None)), 1), else_=0),
+            Problem.topic.asc(),
+            Session.updated_at.desc(),
+        )
     q = q.offset(offset).limit(limit)
     result = await db.execute(q)
     rows = result.all()

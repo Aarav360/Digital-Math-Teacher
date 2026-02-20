@@ -74,7 +74,8 @@ type HistoryEntry =
   | { kind: "shape";  item: ShapeItem }
   | { kind: "text";   item: TextItem }
   | { kind: "image";  item: ImageItem }
-  | { kind: "paste";  strokes: Stroke[]; shapes: ShapeItem[] };
+  | { kind: "paste";  strokes: Stroke[]; shapes: ShapeItem[] }
+  | { kind: "delete"; strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; imageItems: ImageItem[] };
 
 function applyUndo(
   entry: HistoryEntry,
@@ -82,6 +83,8 @@ function applyUndo(
   setShapes: React.Dispatch<React.SetStateAction<ShapeItem[]>>,
   setTextItems: React.Dispatch<React.SetStateAction<TextItem[]>>,
   setImageItems: React.Dispatch<React.SetStateAction<ImageItem[]>>,
+  imageCacheRef?: React.RefObject<Map<string, HTMLImageElement>>,
+  redrawCanvasRef?: React.RefObject<() => void>,
 ) {
   switch (entry.kind) {
     case "stroke": setStrokes((prev) => prev.filter((s) => s.id !== entry.item.id)); break;
@@ -93,6 +96,23 @@ function applyUndo(
       const shIds = new Set(entry.shapes.map((s) => s.id));
       setStrokes((prev) => prev.filter((s) => !sIds.has(s.id)));
       setShapes((prev) => prev.filter((s) => !shIds.has(s.id)));
+      break;
+    }
+    case "delete": {
+      if (entry.strokes.length)   setStrokes((prev) => [...prev, ...entry.strokes]);
+      if (entry.shapes.length)    setShapes((prev) => [...prev, ...entry.shapes]);
+      if (entry.textItems.length) setTextItems((prev) => [...prev, ...entry.textItems]);
+      if (entry.imageItems.length) {
+        setImageItems((prev) => [...prev, ...entry.imageItems]);
+        entry.imageItems.forEach((item) => {
+          if (!imageCacheRef?.current?.has(item.id)) {
+            const img = new Image();
+            img.onload = () => redrawCanvasRef?.current?.();
+            img.src = item.dataUrl;
+            imageCacheRef?.current?.set(item.id, img);
+          }
+        });
+      }
       break;
     }
   }
@@ -124,6 +144,17 @@ function applyRedo(
       setStrokes((prev) => [...prev, ...entry.strokes]);
       setShapes((prev) => [...prev, ...entry.shapes]);
       break;
+    case "delete": {
+      const sIds  = new Set(entry.strokes.map((s) => s.id));
+      const shIds = new Set(entry.shapes.map((s) => s.id));
+      const tIds  = new Set(entry.textItems.map((t) => t.id));
+      const iIds  = new Set(entry.imageItems.map((i) => i.id));
+      if (entry.strokes.length)    setStrokes((prev) => prev.filter((s) => !sIds.has(s.id)));
+      if (entry.shapes.length)     setShapes((prev) => prev.filter((s) => !shIds.has(s.id)));
+      if (entry.textItems.length)  setTextItems((prev) => prev.filter((t) => !tIds.has(t.id)));
+      if (entry.imageItems.length) setImageItems((prev) => prev.filter((i) => !iIds.has(i.id)));
+      break;
+    }
   }
 }
 
@@ -145,7 +176,8 @@ function useWhiteboardHistory(
     setFuture([]);
   }, []);
 
-  const recordDelete = useCallback(() => {
+  const recordDelete = useCallback((entry: Extract<HistoryEntry, { kind: "delete" }>) => {
+    setHistory((prev) => [...prev, entry]);
     setFuture([]);
   }, []);
 
@@ -159,10 +191,10 @@ function useWhiteboardHistory(
       if (prev.length === 0) return prev;
       const entry = prev[prev.length - 1];
       setFuture((f) => [...f, entry]);
-      applyUndo(entry, setStrokes, setShapes, setTextItems, setImageItems);
+      applyUndo(entry, setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, redrawCanvasRef);
       return prev.slice(0, -1);
     });
-  }, [setStrokes, setShapes, setTextItems, setImageItems]);
+  }, [setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, redrawCanvasRef]);
 
   const redo = useCallback(() => {
     setFuture((prev) => {
@@ -229,10 +261,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
               const raw = window.localStorage.getItem(oldKey);
               if (raw) {
                 const data = JSON.parse(raw) as { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] };
-                // Only migrate if the session has no snapshot yet (checked after snapshot load)
-                // Store the data in a pending migration ref so snapshot load can use it
-                pendingBlankMigrationRef.current = data;
-                window.localStorage.removeItem(oldKey);
+                // Only migrate if the session has no snapshot yet (checked after snapshot load).
+                // Store both the data and oldKey so the old entry is only removed after a successful save.
+                pendingBlankMigrationRef.current = { data, oldKey };
               }
             } catch {
               // Ignore invalid old data
@@ -303,8 +334,8 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
   const saveControllerRef = useRef<AbortController | null>(null);
   const pendingSaveRef = useRef<NodeJS.Timeout | null>(null);
   const migrationAttemptedRef = useRef<boolean>(false);
-  // Holds old localStorage blank board data pending migration to the backend
-  const pendingBlankMigrationRef = useRef<{ strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] } | null>(null);
+  // Holds old localStorage blank board data pending migration to the backend (keeps oldKey so we only remove it on success)
+  const pendingBlankMigrationRef = useRef<{ data: { strokes?: Stroke[]; shapes?: ShapeItem[]; textItems?: TextItem[]; imageItems?: ImageItem[] }; oldKey: string } | null>(null);
 
   // Refs for latest state values (to avoid stale closures in autosave)
   const strokesRef = useRef<Stroke[]>([]);
@@ -557,17 +588,19 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
           // 2. Old blank-board localStorage data captured in session-load (pendingBlankMigrationRef)
           if (!currentUser?.id) return;
 
+          // Capture oldKey before the IIFE clears the ref so the success handler can remove it
+          const migratedOldKey = pendingBlankMigrationRef.current?.oldKey ?? null;
           const data = (() => {
             // Prefer pending blank migration data captured during session load
             if (pendingBlankMigrationRef.current) {
-              const d = pendingBlankMigrationRef.current;
+              const { data: d } = pendingBlankMigrationRef.current;
               pendingBlankMigrationRef.current = null;
               return d;
             }
             // Fall back to old per-session localStorage draft
             const key = getDraftKey(sessionId);
             const migrationFlagKey = `${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`;
-            if (!key || !migrationAttemptedRef.current === false || typeof window === "undefined") return null;
+            if (!key || migrationAttemptedRef.current || typeof window === "undefined") return null;
             if (window.localStorage.getItem(migrationFlagKey)) return null;
             try {
               const raw = window.localStorage.getItem(key);
@@ -605,6 +638,8 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
                 if (migrateResult.ok) {
                   const key = getDraftKey(sessionId);
                   if (key) window.localStorage.removeItem(key);
+                  // Only now safe to remove the old blank-session key
+                  if (migratedOldKey) window.localStorage.removeItem(migratedOldKey);
                   window.localStorage.setItem(`${MIGRATION_FLAG_PREFIX}${currentUser.id}-${sessionId}`, "1");
                   toast.success("Draft migrated to cloud");
                 } else {
@@ -1599,8 +1634,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       if (currentStroke.current.length > 0) {
         const eraserRadius = penWidth * 5;
         const toRemove = getStrokesUnderEraser(currentStroke.current, eraserRadius, strokes);
+        const removedStrokes = strokes.filter((_, i) => toRemove.has(i));
         setStrokes((prev) => prev.filter((_, i) => !toRemove.has(i)));
-        recordDelete();
+        recordDelete({ kind: "delete", strokes: removedStrokes, shapes: [], textItems: [], imageItems: [] });
       }
     } else if (currentStroke.current.length > 1) {
       const pointsToAdd = [...currentStroke.current];
@@ -1633,8 +1669,9 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
     if (tool === "eraser" && currentStroke.current.length > 0) {
       const eraserRadius = penWidth * 5;
       const toRemove = getStrokesUnderEraser(currentStroke.current, eraserRadius, strokes);
+      const removedStrokes = strokes.filter((_, i) => toRemove.has(i));
       setStrokes((prev) => prev.filter((_, i) => !toRemove.has(i)));
-      recordDelete();
+      recordDelete({ kind: "delete", strokes: removedStrokes, shapes: [], textItems: [], imageItems: [] });
     } else if (currentStroke.current.length > 1) {
       const newStroke: Stroke = { id: nextId(), points: [...currentStroke.current], color: penColor, width: penWidth, tool: tool as Stroke["tool"] };
       setStrokes((prev) => [...prev, newStroke]);
@@ -1688,11 +1725,13 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   const deleteSelected = () => {
     if (selectedStrokeIndices.size === 0 && selectedShapeIndices.size === 0) return;
+    const removedStrokes = strokes.filter((_, i) => selectedStrokeIndices.has(i));
+    const removedShapes  = shapes.filter((_, i) => selectedShapeIndices.has(i));
     setStrokes((prev) => prev.filter((_, i) => !selectedStrokeIndices.has(i)));
     setShapes((prev) => prev.filter((_, i) => !selectedShapeIndices.has(i)));
     setSelectedStrokeIndices(new Set());
     setSelectedShapeIndices(new Set());
-    recordDelete();
+    recordDelete({ kind: "delete", strokes: removedStrokes, shapes: removedShapes, textItems: [], imageItems: [] });
   };
 
   const copySelection = useCallback(() => {
@@ -1789,18 +1828,21 @@ function SessionPageInner({ sessionId }: { sessionId: string }) {
       } else if (e.key === "Backspace" || e.key === "Delete") {
         if (selectedImageId) {
           e.preventDefault();
+          const removedImage = imageItems.find((i) => i.id === selectedImageId);
           setImageItems((prev) => prev.filter((i) => i.id !== selectedImageId));
           setSelectedImageId(null);
-          recordDelete();
+          recordDelete({ kind: "delete", strokes: [], shapes: [], textItems: [], imageItems: removedImage ? [removedImage] : [] });
         } else {
           const { strokes: si, shapes: sh } = selectionRef.current;
           if (si.size > 0 || sh.size > 0) {
             e.preventDefault();
+            const removedStrokes = strokes.filter((_, i) => si.has(i));
+            const removedShapes  = shapes.filter((_, i) => sh.has(i));
             setStrokes((prev) => prev.filter((_, i) => !si.has(i)));
             setShapes((prev) => prev.filter((_, i) => !sh.has(i)));
             setSelectedStrokeIndices(new Set());
             setSelectedShapeIndices(new Set());
-            recordDelete();
+            recordDelete({ kind: "delete", strokes: removedStrokes, shapes: removedShapes, textItems: [], imageItems: [] });
           }
         }
       } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
