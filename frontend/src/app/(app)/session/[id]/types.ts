@@ -64,7 +64,7 @@ export type HistoryEntry =
   | { kind: "shape"; item: ShapeItem }
   | { kind: "text"; item: TextItem }
   | { kind: "image"; item: ImageItem }
-  | { kind: "paste"; strokes: Stroke[]; shapes: ShapeItem[] }
+  | { kind: "paste"; strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; imageItems: ImageItem[] }
   | {
       kind: "delete";
       strokes: Stroke[];

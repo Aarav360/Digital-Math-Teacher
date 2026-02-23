@@ -29,7 +29,7 @@ export function useSnapshotPersistence({
   requestRedraw,
   currentUserId,
 }: PersistenceArgs) {
-  const { refs, imageCacheRef, replaceAll, rebuildImageCache } = content;
+  const { refs, imageCacheRef, replaceAll, rebuildImageCache, state } = content;
   const { strokesRef, shapesRef, textItemsRef, imageItemsRef } = refs;
   const { isLoadingSession, sessionError, pendingBlankMigrationRef } = session;
 
@@ -42,6 +42,7 @@ export function useSnapshotPersistence({
   const pendingSaveRef = useRef<NodeJS.Timeout | null>(null);
   const migrationAttemptedRef = useRef<boolean>(false);
   const canvasSizeRef = useRef({ width: 0, height: 0 });
+  const imagesDirtyRef = useRef(false);
 
   // Tracks component mount state so autosave cleanup doesn't cancel saves on unmount
   const isMountedRef = useRef(true);
@@ -50,6 +51,10 @@ export function useSnapshotPersistence({
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    imagesDirtyRef.current = true;
+  }, [state.imageItems]);
 
   const getDraftKey = useCallback(
     (suffix: string) => {
@@ -129,6 +134,7 @@ export function useSnapshotPersistence({
 
           // isLoadingSnapshot must remain true until cache rebuild completes (invariant)
           await rebuildImageCache(loadedImages, requestRedraw);
+          imagesDirtyRef.current = false;
         } else if (!result.ok && result.status === 404) {
           // No snapshot yet — attempt localStorage migration
           if (!currentUserId) return;
@@ -204,6 +210,7 @@ export function useSnapshotPersistence({
                     `${MIGRATION_FLAG_PREFIX}${currentUserId}-${sessionId}`,
                     "1",
                   );
+                  imagesDirtyRef.current = false;
                   toast.success("Draft migrated to cloud");
                 } else {
                   console.error("Failed to migrate draft:", migrateResult.error);
@@ -227,9 +234,6 @@ export function useSnapshotPersistence({
   }, [sessionId, currentUserId, isLoadingSession, sessionError]);
 
   // ── Autosave ─────────────────────────────────────────────────────────────
-
-  const { state } = content;
-  const { strokes, shapes, textItems } = state;
 
   useEffect(() => {
     // Guard: wait for session + snapshot load before autosaving.
@@ -340,9 +344,9 @@ export function useSnapshotPersistence({
   }, [
     sessionId,
     currentUserId,
-    strokes,
-    shapes,
-    textItems,
+    state.strokes,
+    state.shapes,
+    state.textItems,
     isLoadingSession,
     isLoadingSnapshot,
     sessionError,
@@ -370,6 +374,11 @@ export function useSnapshotPersistence({
     setIsSavingSnapshot(true);
 
     const { width, height } = canvasSizeRef.current;
+    const serializedBeforeSave = JSON.stringify({
+      strokes: strokesRef.current,
+      shapes: shapesRef.current,
+      textItems: textItemsRef.current,
+    });
     try {
       const result = await saveSnapshot(sessionId, {
         strokes_json: {
@@ -384,13 +393,9 @@ export function useSnapshotPersistence({
 
       if (!controller.signal.aborted) {
         if (result.ok) {
-          const serialized = JSON.stringify({
-            strokes: strokesRef.current,
-            shapes: shapesRef.current,
-            textItems: textItemsRef.current,
-          });
-          lastSavedRef.current = serialized;
+          lastSavedRef.current = serializedBeforeSave;
           lastSaveTimestampRef.current = Date.now();
+          imagesDirtyRef.current = false;
         } else {
           toast.error("Failed to save before analysis");
         }
@@ -428,9 +433,8 @@ export function useSnapshotPersistence({
       textItems: textItemsRef.current,
     });
     const strokesDirty = serialized !== lastSavedRef.current;
-    const hasImages = imageItemsRef.current.length > 0;
 
-    if (!strokesDirty && !hasImages) return;
+    if (!strokesDirty && !imagesDirtyRef.current) return;
 
     const { width, height } = canvasSizeRef.current;
     const payload = {
@@ -445,10 +449,13 @@ export function useSnapshotPersistence({
     };
 
     const KEEPALIVE_LIMIT = 45 * 1024;
+    /** Chrome/Firefox/Safari ≈ 64 KB total budget for sendBeacon/keepalive; larger payloads are silently dropped. */
+    const BROWSER_KEEPALIVE_CEILING = 64 * 1024;
     const byteLength = new TextEncoder().encode(JSON.stringify(payload)).length;
 
     if (byteLength <= KEEPALIVE_LIMIT) {
       const token = getToken();
+      // Fire-and-forget; attach .catch to avoid unhandled promise rejections (payload already under 64 KB here).
       fetch(`${getApiBase()}/api/v1/sessions/${sessionId}/snapshot`, {
         method: "PUT",
         keepalive: true,
@@ -457,16 +464,61 @@ export function useSnapshotPersistence({
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(payload),
-      });
+      }).catch(() => {});
+      imagesDirtyRef.current = false;
       // Fire-and-forget — browser completes this after navigation
     } else {
+      const { width, height } = canvasSizeRef.current;
+      let backupSucceeded = false;
       try {
-        await saveSnapshot(sessionId, payload);
+        backupSucceeded = tryWriteLocalBackup(sessionId, {
+          strokes: strokesRef.current,
+          shapes: shapesRef.current,
+          textItems: textItemsRef.current,
+          width,
+          height,
+        });
+      } catch {
+        backupSucceeded = false;
+      }
+      try {
+        const result = await saveSnapshot(sessionId, payload);
+        if (result.ok) {
+          imagesDirtyRef.current = false;
+        } else {
+          toast.error("Failed to save before analysis");
+          imagesDirtyRef.current = true;
+        }
       } catch (err) {
         console.error("Exit snapshot failed (payload > 45KB):", err);
+        if (!backupSucceeded) {
+          toast.error("Snapshot may not be saved. Check your connection.");
+        }
+        // Best-effort keepalive retry only when payload is under browser ~64 KB ceiling (Chrome/Firefox/Safari);
+        // larger payloads are silently dropped by the browser, so we skip keepalive and rely on local backup.
+        if (byteLength > BROWSER_KEEPALIVE_CEILING) {
+          console.warn(
+            "Exit snapshot keepalive retry skipped: payload exceeds browser keepalive ceiling (~64 KB). Rely on local backup."
+          );
+        } else {
+          try {
+            const token = getToken();
+            fetch(`${getApiBase()}/api/v1/sessions/${sessionId}/snapshot`, {
+              method: "PUT",
+              keepalive: true,
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify(payload),
+            }).catch(() => {});
+          } catch {
+            // best effort
+          }
+        }
       }
     }
-  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef]);
+  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef, tryWriteLocalBackup]);
 
   return {
     isLoadingSnapshot,

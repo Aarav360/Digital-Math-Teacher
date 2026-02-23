@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import type { ChatMessage } from "@/lib/data";
 
 export function useChat() {
@@ -14,36 +14,57 @@ export function useChat() {
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  const scrollTimeout1Ref = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const delayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollTimeout2Ref = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (scrollTimeout1Ref.current) clearTimeout(scrollTimeout1Ref.current);
+      if (scrollTimeout2Ref.current) clearTimeout(scrollTimeout2Ref.current);
+    };
+  }, []);
 
   const handleSendChat = useCallback(async () => {
     if (!chatInput.trim()) return;
     const userMsg: ChatMessage = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: "user",
       content: chatInput.trim(),
       timestamp: new Date().toISOString(),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setChatInput("");
-    setIsChatLoading(true);
 
-    setTimeout(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (scrollTimeout1Ref.current) clearTimeout(scrollTimeout1Ref.current);
+    scrollTimeout1Ref.current = setTimeout(() => {
+      if (mountedRef.current) chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 50);
 
-    await new Promise<void>((r) => setTimeout(r, 1500));
-    const assistantMsg: ChatMessage = {
-      id: (Date.now() + 1).toString(),
-      role: "assistant",
-      content:
-        "That's a great question! Looking at your work, I can see you're on the right track. Remember to double-check your signs when dividing both sides of the equation. Would you like me to walk through that step in more detail?",
-      timestamp: new Date().toISOString(),
-    };
-    setChatMessages((prev) => [...prev, assistantMsg]);
-    setIsChatLoading(false);
-    setTimeout(() => {
-      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 50);
+    try {
+      setIsChatLoading(true);
+      await new Promise<void>((resolve) => {
+        delayTimeoutRef.current = setTimeout(resolve, 1500);
+      });
+      if (!mountedRef.current) return;
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content:
+          "That's a great question! Looking at your work, I can see you're on the right track. Remember to double-check your signs when dividing both sides of the equation. Would you like me to walk through that step in more detail?",
+        timestamp: new Date().toISOString(),
+      };
+      setChatMessages((prev) => [...prev, assistantMsg]);
+      if (scrollTimeout2Ref.current) clearTimeout(scrollTimeout2Ref.current);
+      scrollTimeout2Ref.current = setTimeout(() => {
+        if (mountedRef.current) chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
+    } finally {
+      if (mountedRef.current) setIsChatLoading(false);
+    }
   }, [chatInput]);
 
   return {

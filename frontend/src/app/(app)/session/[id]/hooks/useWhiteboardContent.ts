@@ -11,6 +11,12 @@ import type { Stroke, ShapeItem, TextItem, ImageItem } from "../types";
  * exposed only via `__unsafeSetters` to `useWhiteboardHistory`. All other hooks
  * must call domain operations on history instead of calling setters directly,
  * except for ephemeral drag-preview mutations (which must never push undo entries).
+ *
+ * Guardrail 3: Any cache or ref that is shared across async work (e.g. image
+ * cache rebuild) must use a generation or mounted guard so updates do not run
+ * after unmount or after a newer run has started.
+ *
+ * Guardrail 4: any cache clear must be paired with `requestRedraw()`.
  */
 export function useWhiteboardContent() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -31,6 +37,14 @@ export function useWhiteboardContent() {
 
   // Image cache: keyed by ImageItem.id; populated lazily in redrawCanvas
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const cacheGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /** Replace all content without pushing an undo entry (for load / clear-all). */
   const replaceAll = useCallback(
@@ -52,14 +66,15 @@ export function useWhiteboardContent() {
    * Rebuild the image cache after a snapshot load.
    * Must be called after `replaceAll` settles. Clears any stale cache entries
    * before creating new Image objects so the canvas repaints cleanly.
-   *
-   * Guardrail 4: any cache clear must be paired with `requestRedraw()`.
+   * Uses a generation guard so concurrent calls do not overwrite each other.
    */
   const rebuildImageCache = useCallback(
     async (
       items: ImageItem[],
       requestRedraw: () => void,
     ): Promise<void> => {
+      cacheGenerationRef.current += 1;
+      const thisGen = cacheGenerationRef.current;
       imageCacheRef.current.clear();
       requestRedraw();
       const loads = items.map(
@@ -67,6 +82,10 @@ export function useWhiteboardContent() {
           new Promise<void>((resolve) => {
             const img = new Image();
             img.onload = () => {
+              if (!mountedRef.current || cacheGenerationRef.current !== thisGen) {
+                resolve();
+                return;
+              }
               imageCacheRef.current.set(item.id, img);
               resolve();
             };
@@ -75,7 +94,9 @@ export function useWhiteboardContent() {
           }),
       );
       await Promise.all(loads);
-      requestRedraw();
+      if (mountedRef.current && cacheGenerationRef.current === thisGen) {
+        requestRedraw();
+      }
     },
     [],
   );

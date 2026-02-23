@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type RefObject } from "react";
 import { getSession, getProblem } from "@/lib/api";
 import type { SessionProblem, Stroke, ShapeItem, TextItem, ImageItem } from "../types";
 import { DEFAULT_WHITEBOARD_TITLE, WHITEBOARD_STORAGE_KEY_PREFIX } from "../constants";
@@ -9,7 +9,7 @@ export interface SessionState {
   sessionError: string | null;
   isBlank: boolean;
   /** Pending blank-board localStorage migration data captured during session load */
-  pendingBlankMigrationRef: React.RefObject<{
+  pendingBlankMigrationRef: RefObject<{
     data: {
       strokes?: Stroke[];
       shapes?: ShapeItem[];
@@ -48,11 +48,18 @@ export function useSession(
     oldKey: string;
   } | null>(null);
 
+  const titleReadyRef = useRef(onTitleReady);
+  useEffect(() => {
+    titleReadyRef.current = onTitleReady;
+  }, [onTitleReady]);
+
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
     setIsLoadingSession(true);
     setSessionError(null);
+    setProblem(null);
+    setIsBlank(false);
 
     getSession(sessionId)
       .then((sessionRes) => {
@@ -66,7 +73,7 @@ export function useSession(
 
         // Set title before setProblem() to prevent problem-sync effect override (R4)
         const initialTitle = sess.title ?? sess.problem?.title ?? DEFAULT_WHITEBOARD_TITLE;
-        onTitleReady(initialTitle);
+        titleReadyRef.current(initialTitle);
 
         if (!sess.problem_id) {
           setIsBlank(true);
@@ -101,26 +108,35 @@ export function useSession(
             estimatedTime: p.estimatedTime,
             statement: p.statement,
           });
+          setIsBlank(false);
           setIsLoadingSession(false);
         } else {
-          return getProblem(sess.problem_id).then((probRes) => {
-            if (cancelled) return;
-            if (probRes.ok) {
-              const p = probRes.data;
-              setProblem({
-                id: p.id,
-                title: p.title,
-                topic: p.topic,
-                difficulty: p.difficulty,
-                type: p.type,
-                estimatedTime: p.estimatedTime,
-                statement: p.statement,
-              });
-            } else {
-              setSessionError("Problem not found");
-            }
-            setIsLoadingSession(false);
-          });
+          return getProblem(sess.problem_id)
+            .then((probRes) => {
+              if (cancelled) return;
+              if (probRes.ok) {
+                const p = probRes.data;
+                setProblem({
+                  id: p.id,
+                  title: p.title,
+                  topic: p.topic,
+                  difficulty: p.difficulty,
+                  type: p.type,
+                  estimatedTime: p.estimatedTime,
+                  statement: p.statement,
+                });
+                setIsBlank(false);
+              } else {
+                setSessionError("Problem not found");
+              }
+              setIsLoadingSession(false);
+            })
+            .catch(() => {
+              if (!cancelled) {
+                setSessionError("Failed to load problem");
+                setIsLoadingSession(false);
+              }
+            });
         }
       })
       .catch(() => {
@@ -133,7 +149,7 @@ export function useSession(
     return () => {
       cancelled = true;
     };
-  }, [sessionId, currentUserId, onTitleReady]);
+  }, [sessionId, currentUserId]);
 
   return {
     problem,

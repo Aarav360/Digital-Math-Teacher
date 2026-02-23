@@ -3,6 +3,21 @@ import type { ImageItem } from "../types";
 import { MIN_IMAGE_SIZE } from "../constants";
 import type { WhiteboardContent } from "./useWhiteboardContent";
 import type { ViewTransform } from "./useViewTransform";
+
+/** UUID for image ids; safe in JSDOM/non-secure contexts (tests: polyfill crypto.randomUUID or mock). */
+function generateId(): string {
+  if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof crypto?.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 import type { useWhiteboardHistory } from "./useWhiteboardHistory";
 import type { RedrawSignal } from "./useRedrawSignal";
 
@@ -13,20 +28,21 @@ interface ImageLayerArgs {
   view: ViewTransform;
   history: History;
   redraw: RedrawSignal;
+  canvasSizeRef: React.RefObject<{ width: number; height: number }>;
 }
 
-export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs) {
+export function useImageLayer({ content, view, history, redraw, canvasSizeRef }: ImageLayerArgs) {
   const { __unsafeSetters, imageCacheRef } = content;
   const { setImageItems } = __unsafeSetters;
   const { scale, viewTransformRef } = view;
   const { requestRedraw } = redraw;
 
-  const canvasSizeRef = useRef({ width: 0, height: 0 });
+  const uploadCancelledRef = useRef(false);
 
   const [draggingImageId, setDraggingImageId] = useState<string | null>(null);
   const imageDragStartRef = useRef<{
-    pageX: number;
-    pageY: number;
+    clientX: number;
+    clientY: number;
     itemX: number;
     itemY: number;
   } | null>(null);
@@ -36,8 +52,8 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
   const [resizingImageId, setResizingImageId] = useState<string | null>(null);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const imageResizeStartRef = useRef<{
-    pageX: number;
-    pageY: number;
+    clientX: number;
+    clientY: number;
     itemX: number;
     itemY: number;
     itemW: number;
@@ -53,6 +69,13 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
   } | null>(null);
 
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    uploadCancelledRef.current = false;
+    return () => {
+      uploadCancelledRef.current = true;
+    };
+  }, []);
 
   // Global cursor while dragging / resizing
   useEffect(() => {
@@ -77,27 +100,22 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
   useEffect(() => {
     if (!draggingImageId || !imageDragStartRef.current) return;
     const onMove = (e: MouseEvent) => {
-      if (!imageDragStartRef.current) return;
-      const dx = (e.clientX - imageDragStartRef.current.pageX) / scale;
-      const dy = (e.clientY - imageDragStartRef.current.pageY) / scale;
-      // Ephemeral preview — does NOT push undo entry (Guardrail 2)
+      const start = imageDragStartRef.current;
+      if (!start) return;
+      const dx = (e.clientX - start.clientX) / scale;
+      const dy = (e.clientY - start.clientY) / scale;
+      const newX = start.itemX + dx;
+      const newY = start.itemY + dy;
       setImageItems((prev) =>
         prev.map((img) =>
-          img.id === draggingImageId
-            ? {
-                ...img,
-                x: imageDragStartRef.current!.itemX + dx,
-                y: imageDragStartRef.current!.itemY + dy,
-              }
-            : img,
+          img.id === draggingImageId ? { ...img, x: newX, y: newY } : img,
         ),
       );
     };
     const onUp = (e: MouseEvent) => {
-      // Commit undo entry: from = baseline captured at drag start, to = final position
       if (imageDragBaselineRef.current && imageDragStartRef.current) {
-        const dx = (e.clientX - imageDragStartRef.current.pageX) / scale;
-        const dy = (e.clientY - imageDragStartRef.current.pageY) / scale;
+        const dx = (e.clientX - imageDragStartRef.current.clientX) / scale;
+        const dy = (e.clientY - imageDragStartRef.current.clientY) / scale;
         const to = {
           x: imageDragStartRef.current.itemX + dx,
           y: imageDragStartRef.current.itemY + dy,
@@ -122,8 +140,8 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
     const onMove = (e: MouseEvent) => {
       const start = imageResizeStartRef.current;
       if (!start) return;
-      const dw = (e.clientX - start.pageX) / scale;
-      const dh = (e.clientY - start.pageY) / scale;
+      const dw = (e.clientX - start.clientX) / scale;
+      const dh = (e.clientY - start.clientY) / scale;
       let newW: number;
       let newH: number;
       if (e.shiftKey) {
@@ -150,8 +168,8 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
       // Commit undo entry: from = baseline captured at resize start, to = final bounds
       if (resizeBaselineRef.current && imageResizeStartRef.current) {
         const start = imageResizeStartRef.current;
-        const dw = (e.clientX - start.pageX) / scale;
-        const dh = (e.clientY - start.pageY) / scale;
+        const dw = (e.clientX - start.clientX) / scale;
+        const dh = (e.clientY - start.clientY) / scale;
         let newW = Math.max(MIN_IMAGE_SIZE, start.itemW + dw);
         let newH: number;
         if (e.shiftKey) {
@@ -192,8 +210,8 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
       imageDragBaselineRef.current = { x: img.x, y: img.y };
       setDraggingImageId(img.id);
       imageDragStartRef.current = {
-        pageX: e.clientX,
-        pageY: e.clientY,
+        clientX: e.clientX,
+        clientY: e.clientY,
         itemX: img.x,
         itemY: img.y,
       };
@@ -218,8 +236,8 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
         height: img.height,
       };
       imageResizeStartRef.current = {
-        pageX: e.clientX,
-        pageY: e.clientY,
+        clientX: e.clientX,
+        clientY: e.clientY,
         itemX: img.x,
         itemY: img.y,
         itemW: img.width,
@@ -244,10 +262,12 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
       }
       const reader = new FileReader();
       reader.onload = () => {
+        if (uploadCancelledRef.current) return;
         const dataUrl = reader.result as string;
         if (!dataUrl || typeof dataUrl !== "string") return;
         const img = new Image();
         img.onload = () => {
+          if (uploadCancelledRef.current) return;
           const maxW = 400, maxH = 300;
           let w = img.naturalWidth, h = img.naturalHeight;
           if (w > maxW || h > maxH) {
@@ -255,9 +275,11 @@ export function useImageLayer({ content, view, history, redraw }: ImageLayerArgs
             w = Math.round(w * r);
             h = Math.round(h * r);
           }
-          const id = Date.now().toString();
+          const id = generateId();
           const { pan: p, scale: s } = viewTransformRef.current;
-          const { width: W, height: H } = canvasSizeRef.current;
+          const size = canvasSizeRef.current;
+          const W = size?.width ?? 0;
+          const H = size?.height ?? 0;
           const viewCenterX = (W / 2 - p.x) / s;
           const viewCenterY = (H / 2 - p.y) / s;
           const x = viewCenterX - w / 2;

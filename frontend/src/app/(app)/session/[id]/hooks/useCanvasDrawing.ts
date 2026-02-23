@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { Point, Tool } from "../types";
 import { GRID_STEP, GRID_COLOR } from "../constants";
 import type { WhiteboardContent } from "./useWhiteboardContent";
@@ -77,6 +77,15 @@ function drawShape(
   }
 }
 
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Image load failed"));
+    img.src = dataUrl;
+  });
+}
+
 export function useCanvasDrawing({
   canvasRef,
   content,
@@ -101,6 +110,7 @@ export function useCanvasDrawing({
   const { strokes, shapes, imageItems } = state;
   const { scale, pan, constantGridSize } = view;
   const { registerRedrawHandler, requestRedraw } = redraw;
+  const failedImagesRef = useRef<Set<string>>(new Set());
 
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -144,12 +154,17 @@ export function useCanvasDrawing({
       }
     }
 
-    // Images (under shapes) — use cache so they draw once loaded
+    // Images (under shapes) — use cache so they draw once loaded; skip permanently failed
     for (const item of imageItems) {
+      if (failedImagesRef.current.has(item.id)) continue;
       let img = imageCacheRef.current.get(item.id);
       if (!img) {
         img = new Image();
         img.onload = () => requestRedraw();
+        img.onerror = () => {
+          failedImagesRef.current.add(item.id);
+          requestRedraw();
+        };
         img.src = item.dataUrl;
         imageCacheRef.current.set(item.id, img);
       }
@@ -280,9 +295,10 @@ export function useCanvasDrawing({
     requestRedraw,
   ]);
 
-  // Register the redraw handler with the signal
-  registerRedrawHandler(redrawCanvas);
-  // Run redraw when dependencies change
+  useEffect(() => {
+    registerRedrawHandler(redrawCanvas);
+  }, [registerRedrawHandler, redrawCanvas]);
+
   useEffect(() => {
     redrawCanvas();
   }, [redrawCanvas]);
@@ -298,7 +314,6 @@ export function useCanvasDrawing({
       const rect = parent.getBoundingClientRect();
       const w = Math.max(1, Math.floor(rect.width));
       const h = Math.max(1, Math.floor(rect.height));
-      if (w === 0 || h === 0) return;
       const { width: prevW, height: prevH } = canvasSizeRef.current;
       if (w === prevW && h === prevH) return;
       canvasSizeRef.current = { width: w, height: h };
@@ -322,7 +337,7 @@ export function useCanvasDrawing({
 
   // ── Export ─────────────────────────────────────────────────────────────────
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -341,9 +356,17 @@ export function useCanvasDrawing({
     ctx.scale(scale, scale);
 
     for (const item of allImages) {
-      const img = new Image();
-      img.src = item.dataUrl;
-      if (img.complete && img.naturalWidth) ctx.drawImage(img, item.x, item.y, item.width, item.height);
+      let img = imageCacheRef.current.get(item.id);
+      if (img?.complete && img.naturalWidth) {
+        ctx.drawImage(img, item.x, item.y, item.width, item.height);
+      } else {
+        try {
+          img = await loadImage(item.dataUrl);
+          ctx.drawImage(img, item.x, item.y, item.width, item.height);
+        } catch {
+          // Skip failed image in export
+        }
+      }
     }
     for (const s of allShapes) {
       drawShape(ctx, s);
@@ -372,6 +395,7 @@ export function useCanvasDrawing({
       ctx.globalAlpha = 1;
     }
     const lineHeight = 1.2;
+    ctx.textBaseline = "top";
     for (const t of textItems) {
       ctx.font = `${t.fontSize}px system-ui, sans-serif`;
       ctx.fillStyle = t.color;
@@ -387,7 +411,7 @@ export function useCanvasDrawing({
     link.download = "whiteboard.png";
     link.href = off.toDataURL("image/png");
     link.click();
-  }, [canvasRef, canvasSizeRef, content.state, pan, scale]);
+  }, [canvasRef, canvasSizeRef, content.state, imageCacheRef, pan, scale]);
 
   return { redrawCanvas, handleExport };
 }

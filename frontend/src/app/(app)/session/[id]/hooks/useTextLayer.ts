@@ -35,8 +35,8 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
   const [hoveredInDragZone, setHoveredInDragZone] = useState(false);
   const [draggingTextId, setDraggingTextId] = useState<string | null>(null);
   const dragStartRef = useRef<{
-    pageX: number;
-    pageY: number;
+    clientX: number;
+    clientY: number;
     itemX: number;
     itemY: number;
   } | null>(null);
@@ -72,19 +72,19 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
       return;
     }
     if (textEditState.id) {
+      const prevText = textEditState.initialText ?? "";
       if (value) {
-        setTextItems((prev) =>
-          prev.map((t) =>
-            t.id === textEditState.id ? { ...t, text: value } : t,
-          ),
-        );
+        if (value !== prevText) history.editText(textEditState.id, prevText, value);
       } else {
-        setTextItems((prev) => prev.filter((t) => t.id !== textEditState.id));
+        const item = content.state.textItems.find((t) => t.id === textEditState.id);
+        if (item) {
+          history.deleteItems({ strokes: [], shapes: [], textItems: [item], imageItems: [] });
+        }
       }
     } else if (value) {
       const baselineOffset = 14;
       const newText: TextItem = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         x: textEditState.x,
         y: textEditState.y + baselineOffset,
         text: value,
@@ -94,7 +94,7 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
       history.addText(newText);
     }
     setTextEditState(null);
-  }, [textEditState, penColor, history, setTextItems]);
+  }, [textEditState, penColor, history, content.state.textItems]);
 
   /** Hit test: is (clientX, clientY) in the 8px perimeter of a text item? */
   const getTextHit = useCallback(
@@ -131,8 +131,8 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
     if (!draggingTextId || !dragStartRef.current) return;
     const onMove = (e: MouseEvent) => {
       if (!dragStartRef.current) return;
-      const dx = (e.clientX - dragStartRef.current.pageX) / scale;
-      const dy = (e.clientY - dragStartRef.current.pageY) / scale;
+      const dx = (e.clientX - dragStartRef.current.clientX) / scale;
+      const dy = (e.clientY - dragStartRef.current.clientY) / scale;
       // Ephemeral preview — does NOT push undo entry (Guardrail 2)
       setTextItems((prev) =>
         prev.map((t) =>
@@ -149,8 +149,8 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
     const onUp = (e: MouseEvent) => {
       // Commit undo entry: from = baseline captured at drag start, to = final position
       if (dragBaselineRef.current && dragStartRef.current) {
-        const dx = (e.clientX - dragStartRef.current.pageX) / scale;
-        const dy = (e.clientY - dragStartRef.current.pageY) / scale;
+        const dx = (e.clientX - dragStartRef.current.clientX) / scale;
+        const dy = (e.clientY - dragStartRef.current.clientY) / scale;
         const to = {
           x: dragStartRef.current.itemX + dx,
           y: dragStartRef.current.itemY + dy,
@@ -179,8 +179,8 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
       dragBaselineRef.current = { x: item.x, y: item.y };
       setDraggingTextId(id);
       dragStartRef.current = {
-        pageX: e.clientX,
-        pageY: e.clientY,
+        clientX: e.clientX,
+        clientY: e.clientY,
         itemX: item.x,
         itemY: item.y,
       };

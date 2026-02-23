@@ -27,7 +27,7 @@ export const MIN_IMAGE_SIZE = 24;
 
 export const BLANK_PROBLEM: SessionProblem = {
   id: "blank",
-  title: "Untitled Whiteboard",
+  title: DEFAULT_WHITEBOARD_TITLE,
   topic: "Scratch",
   difficulty: 0,
   type: "Free",

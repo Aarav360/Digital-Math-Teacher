@@ -29,6 +29,8 @@ export function useWhiteboardTitle(
   const titleLoadedRef = useRef(false);
   // Tracks the last successfully persisted title for flush-on-exit (R5)
   const titleSavedRef = useRef(DEFAULT_WHITEBOARD_TITLE);
+  // Generation guard so a late response doesn't revert a newer save
+  const saveGenRef = useRef(0);
 
   /**
    * Called by useSession once session data arrives (before setProblem fires).
@@ -48,27 +50,47 @@ export function useWhiteboardTitle(
     }
   }, [problem]);
 
-  // Focus + select the input when entering edit mode
+  // Focus + select the input when entering edit mode (capture done in startTitleEdit)
   useEffect(() => {
     if (isEditingTitle) {
-      titleBeforeEditRef.current = whiteboardTitle;
       titleInputRef.current?.focus();
       titleInputRef.current?.select();
     }
-  }, [isEditingTitle, whiteboardTitle]);
+  }, [isEditingTitle]);
+
+  const startTitleEdit = useCallback(() => {
+    titleBeforeEditRef.current = whiteboardTitle;
+    setIsEditingTitle(true);
+  }, [whiteboardTitle]);
 
   const saveTitle = useCallback(() => {
     const trimmed = whiteboardTitle.trim() || DEFAULT_WHITEBOARD_TITLE;
+    saveGenRef.current += 1;
+    const localGen = saveGenRef.current;
     setWhiteboardTitle(trimmed);
-    setIsEditingTitle(false);
     if (sessionId) {
-      updateSessionTitle(sessionId, trimmed).then((res) => {
-        if (res.ok) {
-          titleSavedRef.current = trimmed;
-        } else {
+      updateSessionTitle(sessionId, trimmed)
+        .then((res) => {
+          if (res.ok) {
+            titleSavedRef.current = trimmed;
+            setIsEditingTitle(false);
+          } else {
+            if (localGen === saveGenRef.current) {
+              setWhiteboardTitle(trimmed);
+              setIsEditingTitle(true);
+            }
+            toast.error("Failed to save title");
+          }
+        })
+        .catch(() => {
+          if (localGen === saveGenRef.current) {
+            setWhiteboardTitle(trimmed);
+            setIsEditingTitle(true);
+          }
           toast.error("Failed to save title");
-        }
-      });
+        });
+    } else {
+      setIsEditingTitle(false);
     }
   }, [whiteboardTitle, sessionId]);
 
@@ -96,6 +118,7 @@ export function useWhiteboardTitle(
     setWhiteboardTitle,
     isEditingTitle,
     setIsEditingTitle,
+    startTitleEdit,
     titleInputRef,
     titleSavedRef,
     setInitialTitle,

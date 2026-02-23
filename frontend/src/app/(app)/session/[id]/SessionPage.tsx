@@ -104,7 +104,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   });
 
   const text = useTextLayer({ content, view, history, redraw, penColor });
-  const images = useImageLayer({ content, view, history, redraw });
+  const images = useImageLayer({ content, view, history, redraw, canvasSizeRef: persistence.canvasSizeRef });
   const selection = useSelection({ content, view, history });
   const feedback = useFeedback({
     isBlank: session.isBlank,
@@ -150,18 +150,22 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
       titleInputRef.current?.focus();
       titleInputRef.current?.select();
     }
-  }, [isEditingTitle, whiteboardTitle]);
+  }, [isEditingTitle]);
 
   const saveTitle = useCallback(() => {
     const trimmed = whiteboardTitle.trim() || DEFAULT_WHITEBOARD_TITLE;
     setWhiteboardTitle(trimmed);
     setIsEditingTitle(false);
     if (sessionId) {
-      updateSessionTitle(sessionId, trimmed).then((res) => {
-        if (res.ok) {
-          titleSavedRef.current = trimmed;
-        }
-      });
+      updateSessionTitle(sessionId, trimmed)
+        .then((res) => {
+          if (res.ok) {
+            titleSavedRef.current = trimmed;
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to save title:", err);
+        });
     }
   }, [whiteboardTitle, sessionId]);
 
@@ -223,6 +227,15 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
       idleTimer.current = setTimeout(() => feedback.setShowCheckButton(true), 3000);
     }
   }, [strokes.length, feedback]);
+
+  useEffect(() => {
+    return () => {
+      if (idleTimer.current) {
+        clearTimeout(idleTimer.current);
+        idleTimer.current = null;
+      }
+    };
+  }, []);
 
   // ── Canvas mouse handlers ─────────────────────────────────────────────
 
@@ -428,7 +441,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
         selection.selectionBoxEndRef.current = null;
         selection.isSelectingRef.current = false;
         if (isEditingTitle) cancelTitleEdit();
-      } else if (e.key === "Backspace" || e.key === "Delete") {
+      } else if (!inInput && (e.key === "Backspace" || e.key === "Delete")) {
         if (images.selectedImageId) {
           e.preventDefault();
           const removedImage = content.state.imageItems.find((i) => i.id === images.selectedImageId);
@@ -511,7 +524,11 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
       if (currentTitle !== titleSavedRef.current) {
         try { await updateSessionTitle(sessionId, currentTitle); } catch { /* best effort */ }
       }
-      await persistence.saveOnExit();
+      try {
+        await persistence.saveOnExit();
+      } catch (err) {
+        console.error("saveOnExit failed:", err);
+      }
     }
     router.push("/app");
     router.refresh();
@@ -1019,7 +1036,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     onMouseDown={(e) => images.startImageDrag(img, e)}
                   >
                     <img
-                      src={img.dataUrl || ""}
+                      src={img.dataUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}
                       alt=""
                       className="w-full h-full object-contain pointer-events-none select-none bg-slate-100/50"
                       draggable={false}

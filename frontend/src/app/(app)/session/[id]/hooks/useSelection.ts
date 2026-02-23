@@ -64,6 +64,8 @@ export function useSelection({ content, view, history }: SelectionArgs) {
     selectionBoxStartRef.current = null;
     selectionBoxEndRef.current = null;
     isSelectingRef.current = false;
+    isMovingSelectionRef.current = false;
+    moveSelectionStartRef.current = null;
   }, []);
 
   /** Bounding box of current selection in world coords; null if empty. */
@@ -125,11 +127,14 @@ export function useSelection({ content, view, history }: SelectionArgs) {
       };
       const selectedStrokes = new Set<number>();
       strokes.forEach((stroke, i) => {
-        const minX = Math.min(...stroke.points.map((p) => p.x));
-        const maxX = Math.max(...stroke.points.map((p) => p.x));
-        const minY = Math.min(...stroke.points.map((p) => p.y));
-        const maxY = Math.max(...stroke.points.map((p) => p.y));
-        if (rectsOverlap(r, { x: minX, y: minY, w: maxX - minX, h: maxY - minY }))
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of stroke.points) {
+          minX = Math.min(minX, p.x);
+          maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y);
+          maxY = Math.max(maxY, p.y);
+        }
+        if (minX !== Infinity && rectsOverlap(r, { x: minX, y: minY, w: maxX - minX, h: maxY - minY }))
           selectedStrokes.add(i);
       });
       const selectedShapes = new Set<number>();
@@ -180,6 +185,9 @@ export function useSelection({ content, view, history }: SelectionArgs) {
     (canvasSizeRef: React.RefObject<{ width: number; height: number }>) => {
       const clip = clipboardRef.current;
       if (!clip || (clip.strokes.length === 0 && clip.shapes.length === 0)) return;
+      const size = canvasSizeRef.current;
+      if (!size) return;
+      const { width: W, height: H } = size;
       const allPoints: Point[] = [];
       clip.strokes.forEach((s) => s.points.forEach((p) => allPoints.push(p)));
       clip.shapes.forEach((s) => {
@@ -191,7 +199,6 @@ export function useSelection({ content, view, history }: SelectionArgs) {
         x: allPoints.reduce((a, p) => a + p.x, 0) / allPoints.length,
         y: allPoints.reduce((a, p) => a + p.y, 0) / allPoints.length,
       };
-      const { width: W, height: H } = canvasSizeRef.current;
       const pasteCenter = {
         x: (W / 2 - pan.x) / scale,
         y: (H / 2 - pan.y) / scale,

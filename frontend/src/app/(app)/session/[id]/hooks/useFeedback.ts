@@ -17,30 +17,40 @@ export function useFeedback({ isBlank, currentUser, persistence }: FeedbackArgs)
   const [feedback, setFeedback] = useState<StepFeedback[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const isAnalyzingRef = useRef(false);
   const handleCheckStepsRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const handleCheckSteps = useCallback(async () => {
-    // Immediate save before analysis (includes imageItems — explicit action)
-    if (!isBlank && currentUser) {
-      await forceImmediateSave();
-    }
-
+    if (isAnalyzingRef.current) return;
     setShowCheckButton(false);
     setIsAnalyzing(true);
-    const texts = [
-      "Reading your steps...",
-      "Analyzing your work...",
-      "Reviewing step 2...",
-      "Almost done...",
-    ];
-    for (let i = 0; i < texts.length; i++) {
-      setAnalyzeText(texts[i]);
-      await new Promise<void>((r) => setTimeout(r, 800));
+    isAnalyzingRef.current = true;
+    setErrorMessage(null);
+    try {
+      if (!isBlank && currentUser) {
+        await forceImmediateSave();
+      }
+      const texts = [
+        "Reading your steps...",
+        "Analyzing your work...",
+        "Reviewing step 2...",
+        "Almost done...",
+      ];
+      for (let i = 0; i < texts.length; i++) {
+        setAnalyzeText(texts[i]);
+        await new Promise<void>((r) => setTimeout(r, 800));
+      }
+      setFeedback(MOCK_FEEDBACK);
+      setCurrentStep(0);
+    } catch (err) {
+      console.error("Check steps failed:", err);
+      setErrorMessage("Failed to analyze steps. Please try again.");
+    } finally {
+      setIsAnalyzing(false);
+      isAnalyzingRef.current = false;
     }
-    setIsAnalyzing(false);
-    setFeedback(MOCK_FEEDBACK);
-    setCurrentStep(0);
   }, [isBlank, currentUser, forceImmediateSave]);
 
   useEffect(() => {
@@ -49,8 +59,14 @@ export function useFeedback({ isBlank, currentUser, persistence }: FeedbackArgs)
 
   /** Clear feedback state (called by orchestrator on clearAll). */
   const clear = useCallback(() => {
+    if (isAnalyzingRef.current) return;
+    setAnalyzeText("");
+    setCurrentStep(0);
+    setExpandedStep(null);
     setFeedback([]);
     setShowCheckButton(false);
+    setErrorMessage(null);
+    setIsAnalyzing(false);
   }, []);
 
   return {
@@ -64,6 +80,8 @@ export function useFeedback({ isBlank, currentUser, persistence }: FeedbackArgs)
     setCurrentStep,
     expandedStep,
     setExpandedStep,
+    errorMessage,
+    setErrorMessage,
     handleCheckSteps,
     handleCheckStepsRef,
     clear,

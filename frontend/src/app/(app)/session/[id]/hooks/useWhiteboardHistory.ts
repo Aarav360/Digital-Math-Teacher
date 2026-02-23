@@ -18,8 +18,9 @@ type ResizeImageEntry = {
   oldBounds: { x: number; y: number; width: number; height: number };
   newBounds: { x: number; y: number; width: number; height: number };
 };
+type EditTextEntry = { kind: "editText"; id: string; prevText: string; nextText: string };
 
-type ExtendedHistoryEntry = HistoryEntry | MoveTextEntry | MoveImageEntry | ResizeImageEntry;
+type ExtendedHistoryEntry = HistoryEntry | MoveTextEntry | MoveImageEntry | ResizeImageEntry | EditTextEntry;
 
 // ── Internal apply helpers ───────────────────────────────────────────────────
 
@@ -78,11 +79,22 @@ function applyUndo(
       );
       break;
     }
+    case "editText": {
+      const { id, prevText } = entry;
+      setTextItems((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, text: prevText } : t)),
+      );
+      break;
+    }
     case "paste": {
       const sIds = new Set(entry.strokes.map((s) => s.id));
       const shIds = new Set(entry.shapes.map((s) => s.id));
+      const tIds = new Set(entry.textItems.map((t) => t.id));
+      const iIds = new Set(entry.imageItems.map((i) => i.id));
       setStrokes((prev) => prev.filter((s) => !sIds.has(s.id)));
       setShapes((prev) => prev.filter((s) => !shIds.has(s.id)));
+      setTextItems((prev) => prev.filter((t) => !tIds.has(t.id)));
+      setImageItems((prev) => prev.filter((i) => !iIds.has(i.id)));
       break;
     }
     case "delete": {
@@ -166,9 +178,28 @@ function applyRedo(
       );
       break;
     }
+    case "editText": {
+      const { id, nextText } = entry;
+      setTextItems((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, text: nextText } : t)),
+      );
+      break;
+    }
     case "paste":
       setStrokes((prev) => [...prev, ...entry.strokes]);
       setShapes((prev) => [...prev, ...entry.shapes]);
+      setTextItems((prev) => [...prev, ...entry.textItems]);
+      if (entry.imageItems.length) {
+        setImageItems((prev) => [...prev, ...entry.imageItems]);
+        entry.imageItems.forEach((item) => {
+          if (!imageCacheRef.current?.has(item.id)) {
+            const img = new Image();
+            img.onload = () => requestRedraw();
+            img.src = item.dataUrl;
+            imageCacheRef.current?.set(item.id, img);
+          }
+        });
+      }
       break;
     case "delete": {
       const sIds = new Set(entry.strokes.map((s) => s.id));
@@ -209,9 +240,12 @@ export function useWhiteboardHistory(
 
   const [history, setHistory] = useState<ExtendedHistoryEntry[]>([]);
   const [future, setFuture] = useState<ExtendedHistoryEntry[]>([]);
-  const seqRef = useRef(0);
+  const historyRef = useRef<ExtendedHistoryEntry[]>([]);
+  const futureRef = useRef<ExtendedHistoryEntry[]>([]);
+  historyRef.current = history;
+  futureRef.current = future;
 
-  const nextId = useCallback(() => `item-${++seqRef.current}`, []);
+  const nextId = useCallback(() => crypto.randomUUID(), []);
 
   const _push = useCallback((entry: ExtendedHistoryEntry) => {
     setHistory((prev) => [...prev, entry]);
@@ -279,12 +313,27 @@ export function useWhiteboardHistory(
   );
 
   const pasteSelection = useCallback(
-    (payload: { strokes: Stroke[]; shapes: ShapeItem[] }) => {
+    (payload: {
+      strokes: Stroke[];
+      shapes: ShapeItem[];
+      textItems?: TextItem[];
+      imageItems?: ImageItem[];
+    }) => {
+      const textItems = payload.textItems ?? [];
+      const imageItems = payload.imageItems ?? [];
       setStrokes((prev) => [...prev, ...payload.strokes]);
       setShapes((prev) => [...prev, ...payload.shapes]);
-      _push({ kind: "paste", strokes: payload.strokes, shapes: payload.shapes });
+      setTextItems((prev) => [...prev, ...textItems]);
+      setImageItems((prev) => [...prev, ...imageItems]);
+      _push({
+        kind: "paste",
+        strokes: payload.strokes,
+        shapes: payload.shapes,
+        textItems,
+        imageItems,
+      });
     },
-    [setStrokes, setShapes, _push],
+    [setStrokes, setShapes, setTextItems, setImageItems, _push],
   );
 
   const commitMoveText = useCallback(
@@ -292,6 +341,16 @@ export function useWhiteboardHistory(
       _push({ kind: "moveText", id, from, to });
     },
     [_push],
+  );
+
+  const editText = useCallback(
+    (id: string, prevText: string, nextText: string) => {
+      setTextItems((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, text: nextText } : t)),
+      );
+      _push({ kind: "editText", id, prevText, nextText });
+    },
+    [setTextItems, _push],
   );
 
   const commitMoveImage = useCallback(
@@ -326,8 +385,7 @@ export function useWhiteboardHistory(
   const undo = useCallback(() => {
     setHistory((prev) => {
       if (prev.length === 0) return prev;
-      const entry = prev[prev.length - 1];
-      setFuture((f) => [...f, entry]);
+      const entry = prev[prev.length - 1]!;
       applyUndo(
         entry,
         setStrokes,
@@ -337,6 +395,7 @@ export function useWhiteboardHistory(
         imageCacheRef,
         requestRedraw,
       );
+      setFuture((f) => [...f, entry]);
       return prev.slice(0, -1);
     });
   }, [setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, requestRedraw]);
@@ -344,8 +403,7 @@ export function useWhiteboardHistory(
   const redo = useCallback(() => {
     setFuture((prev) => {
       if (prev.length === 0) return prev;
-      const entry = prev[prev.length - 1];
-      setHistory((h) => [...h, entry]);
+      const entry = prev[prev.length - 1]!;
       applyRedo(
         entry,
         setStrokes,
@@ -355,6 +413,7 @@ export function useWhiteboardHistory(
         imageCacheRef,
         requestRedraw,
       );
+      setHistory((h) => [...h, entry]);
       return prev.slice(0, -1);
     });
   }, [setStrokes, setShapes, setTextItems, setImageItems, imageCacheRef, requestRedraw]);
@@ -365,6 +424,7 @@ export function useWhiteboardHistory(
     addShape,
     addText,
     addImage,
+    editText,
     deleteItems,
     pasteSelection,
     commitMoveText,
