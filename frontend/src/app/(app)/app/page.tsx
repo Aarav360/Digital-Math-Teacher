@@ -15,13 +15,14 @@ import {
   MoreVertical,
   Clock,
   CheckCircle2,
-  Pencil,
+  AlertTriangle,
   ChevronDown,
   Loader2,
   BookOpen,
 } from "lucide-react";
 import { TEMPLATES, type Template } from "@/lib/data";
-import { listSessions, createBlankSession, type SessionListEntry } from "@/lib/api";
+import { normalizeSessionStatus, SESSION_STATUS_COLORS, SESSION_STATUS_LABELS } from "@/lib/session-status";
+import { listSessions, createBlankSession, listNotebooks, type SessionListEntry, type NotebookListEntry } from "@/lib/api";
 import { AuroraBackground } from "@/components/aurora-background";
 import { toast } from "sonner";
 
@@ -63,9 +64,9 @@ function getTopicColor(topic: string | null) {
   return (topic && map[topic]) || "#6e6e73";
 }
 
-/** Deterministic SVG thumbnail path based on session id */
-function getThumbnailPath(id: string) {
-  const seed = id.charCodeAt(id.length - 1);
+/** Deterministic SVG thumbnail path + color based on session id */
+function getThumbnailStyle(id: string) {
+  const seed = id.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
   const paths = [
     "M 20 60 Q 40 20 60 50 T 100 40 T 140 55",
     "M 15 70 L 45 30 L 75 70 M 85 35 Q 105 70 125 35",
@@ -77,8 +78,34 @@ function getThumbnailPath(id: string) {
     "M 20 60 Q 35 30 50 60 Q 65 90 80 60 M 90 35 L 110 65 L 130 35",
     "M 25 55 L 60 25 L 95 55 L 130 25",
     "M 20 45 Q 45 15 70 45 T 120 45 M 30 65 L 110 65",
+    "M 18 58 Q 45 18 72 55 T 126 52 M 34 78 L 118 78",
+    "M 20 35 Q 55 70 90 35 Q 120 10 140 35",
+    "M 24 68 L 52 38 L 80 68 M 95 68 Q 118 40 140 62",
+    "M 20 52 Q 48 18 76 52 T 132 52 M 36 82 L 124 82",
+    "M 25 40 Q 55 10 85 40 Q 115 70 140 40",
+    "M 20 70 L 60 30 L 100 70 L 140 30",
+    "M 22 58 C 42 28 58 78 78 48 S 118 28 138 52",
+    "M 30 75 Q 70 25 110 75 M 30 35 L 110 35",
+    "M 18 62 Q 38 28 58 62 Q 78 96 98 62 Q 118 28 138 62",
   ];
-  return paths[seed % paths.length];
+  const colors = [
+    "#2A7BD4",
+    "#34C759",
+    "#FF9500",
+    "#AF52DE",
+    "#FF2D55",
+    "#5AC8FA",
+    "#FF9F0A",
+    "#30B0C7",
+    "#8E8E93",
+    "#7D5FFF",
+    "#A2845E",
+    "#40C463",
+  ];
+  return {
+    path: paths[seed % paths.length],
+    color: colors[seed % colors.length],
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -144,15 +171,30 @@ function TemplateCard({
   );
 }
 
+function NotebookTemplateCard() {
+  return (
+    <Link href="/notebooks/new" className="group shrink-0 flex flex-col items-center">
+      <div className="w-[132px] h-[96px] rounded-md border border-border bg-card flex items-center justify-center transition-all group-hover:shadow-md overflow-hidden">
+        <div className="w-12 h-12 rounded-full border-2 border-border bg-card flex items-center justify-center group-hover:border-primary/40 group-hover:bg-primary/5 transition-colors">
+          <BookOpen className="size-6 text-muted-foreground group-hover:text-primary/70 transition-colors" />
+        </div>
+      </div>
+      <p className="text-xs text-foreground mt-2 text-center w-[132px] truncate">
+        New Notebook
+      </p>
+    </Link>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Whiteboard Thumbnail Card                                          */
 /* ------------------------------------------------------------------ */
 
 function WhiteboardCard({ session }: { session: SessionListEntry }) {
-  const path = getThumbnailPath(session.id);
+  const { path, color: thumbColor } = getThumbnailStyle(session.id);
   const color = getTopicColor(session.topic);
   const displayTitle = session.title ?? session.problem_title ?? "Untitled Whiteboard";
-  const isInProgress = session.status === "in_progress" || session.status === "not_started";
+  const normalizedStatus = normalizeSessionStatus(session.status);
 
   return (
     <div className="group flex flex-col">
@@ -162,6 +204,9 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
       >
         {/* Thumbnail preview */}
         <div className="aspect-[4/3] rounded-t-md border border-border bg-card overflow-hidden relative transition-all group-hover:border-primary/30 group-hover:shadow-md">
+          <div className="absolute top-2 left-2 z-10">
+            <span className={`inline-block h-2.5 w-2.5 rounded-full ${SESSION_STATUS_COLORS[normalizedStatus]} ring-1 ring-white/80`} />
+          </div>
           <svg
             className="absolute inset-0 w-full h-full"
             viewBox="0 0 160 120"
@@ -183,7 +228,7 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
             <path
               d={path}
               fill="none"
-              stroke={color}
+              stroke={thumbColor}
               strokeWidth="2.2"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -193,13 +238,6 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
             <line x1="20" y1="88" x2="75" y2="88" stroke="var(--color-muted-foreground)" strokeWidth="1" strokeLinecap="round" opacity="0.18" />
             <line x1="20" y1="96" x2="55" y2="96" stroke="var(--color-muted-foreground)" strokeWidth="1" strokeLinecap="round" opacity="0.12" />
           </svg>
-
-          {isInProgress && (
-            <div className="absolute top-2 right-2 flex items-center gap-1 bg-primary/10 text-primary text-[10px] font-medium px-1.5 py-0.5 rounded-full backdrop-blur-sm">
-              <Pencil className="size-2.5" />
-              Editing
-            </div>
-          )}
 
           <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity" />
         </div>
@@ -222,20 +260,73 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
               />
             </span>
             <span className="text-[11px] text-muted-foreground">
-              {isInProgress ? (
+              {normalizedStatus === "completed" ? (
                 <span className="flex items-center gap-1">
-                  <Clock className="size-3 inline" />
+                  <CheckCircle2 className="size-3 inline" />
+                  {formatRelativeDate(session.updated_at)}
+                </span>
+              ) : normalizedStatus === "needs_review" ? (
+                <span className="flex items-center gap-1">
+                  <AlertTriangle className="size-3 inline" />
                   {formatRelativeDate(session.updated_at)}
                 </span>
               ) : (
                 <span className="flex items-center gap-1">
-                  <CheckCircle2 className="size-3 inline" />
+                  <Clock className="size-3 inline" />
                   {formatRelativeDate(session.updated_at)}
                 </span>
               )}
             </span>
           </div>
         </div>
+        <button
+          type="button"
+          className="p-1 rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent transition-all shrink-0"
+          aria-label="More options"
+          onClick={(e) => {
+            e.stopPropagation();
+          }}
+        >
+          <MoreVertical className="size-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Notebook Card                                                      */
+/* ------------------------------------------------------------------ */
+
+function NotebookCard({ notebook }: { notebook: NotebookListEntry }) {
+  return (
+    <div className="group flex flex-col">
+      <Link href={`/notebooks/${notebook.id}`} className="block">
+        <div className="aspect-[4/3] rounded-t-md border border-border bg-card overflow-hidden relative transition-all group-hover:border-primary/30 group-hover:shadow-md">
+          <div className="absolute inset-0 bg-gradient-to-br from-card via-card to-muted/40" />
+          <div className="absolute top-3 left-3 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-flex h-2 w-2 rounded-full bg-muted-foreground/60" />
+            Notebook
+          </div>
+          <div className="absolute bottom-3 left-3 right-3">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <BookOpen className="size-4 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground truncate">{notebook.title}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {notebook.problem_count} problem{notebook.problem_count === 1 ? "" : "s"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Link>
+      <div className="flex items-center gap-2 px-3 py-3 border border-t-0 border-border rounded-b-md bg-card group-hover:border-primary/30 transition-colors min-h-[58px]">
+        <span className="text-[11px] text-muted-foreground flex-1">
+          Updated {formatRelativeDate(notebook.updated_at)}
+        </span>
         <button
           type="button"
           className="p-1 rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent transition-all shrink-0"
@@ -269,18 +360,24 @@ export default function DashboardPage() {
   const [isCreatingBlank, setIsCreatingBlank] = useState(false);
 
   const [sessions, setSessions] = useState<SessionListEntry[]>([]);
+  const [notebooks, setNotebooks] = useState<NotebookListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchSessions = useCallback(() => {
+  const fetchDashboard = useCallback(() => {
     setLoading(true);
     setError(null);
-    listSessions(sort)
-      .then((res) => {
-        if (res.ok) {
-          setSessions(res.data);
+    Promise.all([listSessions(sort, 50, false), listNotebooks()])
+      .then(([sessionsRes, notebooksRes]) => {
+        if (sessionsRes.ok) {
+          setSessions(sessionsRes.data);
         } else {
-          setError(res.error);
+          setError(sessionsRes.error);
+        }
+        if (notebooksRes.ok) {
+          setNotebooks(notebooksRes.data);
+        } else {
+          setNotebooks([]);
         }
       })
       .catch(() => {
@@ -292,17 +389,17 @@ export default function DashboardPage() {
   }, [sort]);
 
   useEffect(() => {
-    fetchSessions();
-  }, [fetchSessions]);
+    fetchDashboard();
+  }, [fetchDashboard]);
 
   // Refetch when the user switches back to this tab after being in a session
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") fetchSessions();
+      if (document.visibilityState === "visible") fetchDashboard();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [fetchSessions]);
+  }, [fetchDashboard]);
 
   const handleCreateBlank = useCallback(async () => {
     if (isCreatingBlank) return;
@@ -338,6 +435,7 @@ export default function DashboardPage() {
             Start a new whiteboard
           </h2>
           <div className="flex gap-4 overflow-x-auto pb-1 scrollbar-none">
+            <NotebookTemplateCard />
             {TEMPLATES.map((t) => (
               <TemplateCard
                 key={t.id}
@@ -443,7 +541,7 @@ export default function DashboardPage() {
             <button
               type="button"
               className="text-xs text-primary hover:underline"
-              onClick={fetchSessions}
+              onClick={fetchDashboard}
             >
               Retry
             </button>
@@ -451,7 +549,7 @@ export default function DashboardPage() {
         )}
 
         {/* Empty */}
-        {!loading && !error && sessions.length === 0 && (
+        {!loading && !error && sessions.length === 0 && notebooks.length === 0 && (
           <div className="flex flex-col items-center py-16 text-center">
             <BookOpen className="size-8 text-muted-foreground/40 mb-3" />
             <p className="text-sm text-muted-foreground mb-1">No whiteboards yet</p>
@@ -465,8 +563,11 @@ export default function DashboardPage() {
         )}
 
         {/* Grid view */}
-        {!loading && !error && sessions.length > 0 && view === "grid" && (
+        {!loading && !error && (sessions.length > 0 || notebooks.length > 0) && view === "grid" && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            {notebooks.map((notebook) => (
+              <NotebookCard key={notebook.id} notebook={notebook} />
+            ))}
             {sessions.map((session) => (
               <WhiteboardCard key={session.id} session={session} />
             ))}
@@ -474,11 +575,35 @@ export default function DashboardPage() {
         )}
 
         {/* List view */}
-        {!loading && !error && sessions.length > 0 && view === "list" && (
+        {!loading && !error && (sessions.length > 0 || notebooks.length > 0) && view === "list" && (
           <div className="border border-border rounded-md bg-card divide-y divide-border">
+            {notebooks.map((notebook) => (
+              <Link
+                key={notebook.id}
+                href={`/notebooks/${notebook.id}`}
+                className="flex items-center gap-4 px-4 py-3 hover:bg-accent/50 transition-colors"
+              >
+                <span className="inline-flex items-center justify-center w-8 h-8 rounded-md shrink-0 bg-primary/10">
+                  <BookOpen className="size-4 text-primary" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground truncate">
+                    {notebook.title}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Notebook • {notebook.problem_count} problem{notebook.problem_count === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-[11px] text-muted-foreground w-20 text-right">
+                    {formatRelativeDate(notebook.updated_at)}
+                  </span>
+                </div>
+              </Link>
+            ))}
             {sessions.map((session) => {
               const color = getTopicColor(session.topic);
-              const isInProgress = session.status === "in_progress" || session.status === "not_started";
+              const normalizedStatus = normalizeSessionStatus(session.status);
               return (
                 <Link
                   key={session.id}
@@ -503,17 +628,10 @@ export default function DashboardPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
-                    {isInProgress ? (
-                      <span className="text-[11px] text-primary font-medium flex items-center gap-1">
-                        <Pencil className="size-3" />
-                        In progress
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                        <CheckCircle2 className="size-3" />
-                        Done
-                      </span>
-                    )}
+                    <span className="text-[11px] text-muted-foreground flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${SESSION_STATUS_COLORS[normalizedStatus]}`} />
+                      {SESSION_STATUS_LABELS[normalizedStatus]}
+                    </span>
                     <span className="text-[11px] text-muted-foreground w-16 text-right">
                       {formatRelativeDate(session.updated_at)}
                     </span>

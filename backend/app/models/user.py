@@ -14,3 +14,4 @@ class User(Base, TimestampMixin):
     is_guest: Mapped[bool] = mapped_column(Boolean, default=False)
 
     sessions: Mapped[list["Session"]] = relationship("Session", back_populates="user", lazy="selectin")
+    notebooks: Mapped[list["Notebook"]] = relationship("Notebook", back_populates="user", lazy="selectin")

@@ -25,8 +25,8 @@ async def analyze_steps(body: AnalysisRequest, user_id: CurrentUserId, db: DbSes
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    # Mark evaluating
-    session.status = SessionStatus.EVALUATING
+    # Mark in progress while analysis runs (simpler status set)
+    session.status = SessionStatus.IN_PROGRESS
     await db.flush()
     # Get latest snapshot or by id
     if snapshot_id:
@@ -52,13 +52,21 @@ async def analyze_steps(body: AnalysisRequest, user_id: CurrentUserId, db: DbSes
     # For scaffold we return empty steps; real impl in services/math_pipeline
     from app.services.math_pipeline import run_analysis
     steps_created = await run_analysis(db, session, snapshot)
-    session.status = SessionStatus.FEEDBACK_READY
-    await db.flush()
     # Load steps with evaluations for response
     steps_result = await db.execute(
         select(Step).where(Step.session_id == session_id).options(selectinload(Step.evaluation)).order_by(Step.step_index)
     )
     steps = steps_result.scalars().all()
+    # Auto-status based on evaluations
+    if steps_created == 0 or not steps:
+        session.status = SessionStatus.IN_PROGRESS
+    else:
+        has_issue = any(
+            s.evaluation and s.evaluation.status in ("incorrect", "warning")
+            for s in steps
+        )
+        session.status = SessionStatus.NEEDS_REVIEW if has_issue else SessionStatus.COMPLETED
+    await db.flush()
     step_reads = [
         StepRead(
             id=s.id,
@@ -73,4 +81,11 @@ async def analyze_steps(body: AnalysisRequest, user_id: CurrentUserId, db: DbSes
         )
         for s in steps
     ]
-    return AnalysisResponse(steps=step_reads, summary=f"{len(step_reads)} steps analyzed.")
+    created_count = steps_created or 0
+    total_count = len(step_reads)
+    existing_count = max(total_count - created_count, 0)
+    if total_count == 0:
+        summary = "No steps available."
+    else:
+        summary = f"{created_count} new steps created, {existing_count} existing steps returned."
+    return AnalysisResponse(steps=step_reads, summary=summary)

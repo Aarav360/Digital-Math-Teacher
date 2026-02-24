@@ -3,30 +3,107 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { listSessions, type SessionListEntry } from "@/lib/api";
-import { Clock, BookOpen, Loader2, AlertCircle } from "lucide-react";
+import { normalizeSessionStatus, SESSION_STATUS_LABELS } from "@/lib/session-status";
+import { Clock, BookOpen, Loader2, AlertCircle, Plus, Variable, TrendingUp, Triangle, Grid3X3, FileText } from "lucide-react";
 import { AuroraBackground } from "@/components/aurora-background";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TEMPLATES } from "@/lib/data";
+
+const ICON_MAP: Record<string, React.ElementType> = {
+  plus: Plus,
+  variable: Variable,
+  "trending-up": TrendingUp,
+  triangle: Triangle,
+  "grid-3x3": Grid3X3,
+  "file-text": FileText,
+};
+
+function getTemplateForTopic(topic: string | null) {
+  if (!topic) return null;
+  return (
+    TEMPLATES.find((t) => t.topic === topic) ??
+    TEMPLATES.find((t) => t.title.toLowerCase() === topic.toLowerCase())
+  );
+}
+
+function HistoryTypeIcon({ session }: { session: SessionListEntry }) {
+  if (session.notebook_title) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+            <BookOpen className="size-4 text-primary" />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent sideOffset={6}>
+          Notebook: {session.notebook_title}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  if (!session.problem_id) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="w-8 h-8 rounded-md bg-white border border-dashed border-slate-300 flex items-center justify-center shrink-0">
+            <Plus className="size-4 text-slate-400" />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent sideOffset={6}>
+          Blank Whiteboard
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  const template = getTemplateForTopic(session.topic);
+  if (template) {
+    const Icon = ICON_MAP[template.icon] || BookOpen;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            className="w-8 h-8 rounded-md border border-transparent flex items-center justify-center shrink-0"
+            style={{
+              borderColor: `${template.color}40`,
+              background: `${template.color}14`,
+            }}
+          >
+            <Icon className="size-4" style={{ color: template.color }} strokeWidth={1.6} />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent sideOffset={6}>
+          {template.title}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <div className="w-8 h-8 rounded-md bg-slate-100 flex items-center justify-center shrink-0">
+      <BookOpen className="size-4 text-slate-400" />
+    </div>
+  );
+}
 
 function statusBadge(status: string) {
-  switch (status) {
+  const normalized = normalizeSessionStatus(status);
+  switch (normalized) {
     case "completed":
       return "bg-green-50 text-green-700";
+    case "needs_review":
+      return "bg-rose-50 text-rose-700";
     case "in_progress":
-    case "evaluating":
-    case "feedback_ready":
-      return "bg-blue-50 text-blue-700";
+      return "bg-amber-50 text-amber-700";
     default:
       return "bg-slate-100 text-slate-600";
   }
 }
 
 function statusLabel(status: string) {
-  switch (status) {
-    case "in_progress": return "In Progress";
-    case "completed": return "Completed";
-    case "evaluating": return "Evaluating";
-    case "feedback_ready": return "Feedback Ready";
-    default: return "Not Started";
-  }
+  const normalized = normalizeSessionStatus(status);
+  return SESSION_STATUS_LABELS[normalized] ?? SESSION_STATUS_LABELS.not_started;
 }
 
 export default function HistoryPage() {
@@ -36,7 +113,7 @@ export default function HistoryPage() {
 
   useEffect(() => {
     setLoading(true);
-    listSessions("recent", 100)
+    listSessions("recent", 100, true)
       .then((res) => {
         if (res.ok) {
           setSessions(res.data);
@@ -96,15 +173,24 @@ export default function HistoryPage() {
             href={`/session/${session.id}`}
             className="grid grid-cols-[1fr_120px_140px_100px_120px] gap-4 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center group"
           >
-            <span className="text-sm font-medium text-foreground truncate">
-              {session.problem_title ?? "Untitled"}
-            </span>
+            <div className="flex items-center gap-3 min-w-0">
+              <HistoryTypeIcon session={session} />
+              <span className="text-sm font-medium text-foreground truncate">
+                {session.title ?? session.problem_title ?? "Untitled"}
+              </span>
+            </div>
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <BookOpen className="size-3" />{session.topic ?? "—"}
             </span>
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Clock className="size-3" />
-              {new Date(session.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              {new Date(session.updated_at).toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
             </span>
             <span className={`text-xs px-2 py-0.5 rounded-full inline-flex w-fit ${statusBadge(session.status)}`}>
               {statusLabel(session.status)}
