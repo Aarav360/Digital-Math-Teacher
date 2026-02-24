@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect, type RefObject } from "react";
 import { getSession, getProblem } from "@/lib/api";
-import type { SessionProblem, Stroke, ShapeItem, TextItem, ImageItem } from "../types";
+import type { SessionProblem, SessionNotebookProblem, Stroke, ShapeItem, TextItem, ImageItem } from "../types";
 import { DEFAULT_WHITEBOARD_TITLE, WHITEBOARD_STORAGE_KEY_PREFIX } from "../constants";
 
 export interface SessionState {
   problem: SessionProblem | null;
+  notebookProblem: SessionNotebookProblem | null;
   isLoadingSession: boolean;
   sessionError: string | null;
   isBlank: boolean;
+  status: string;
+  setStatus: (status: string) => void;
   /** Pending blank-board localStorage migration data captured during session load */
   pendingBlankMigrationRef: RefObject<{
     data: {
@@ -34,9 +37,12 @@ export function useSession(
   onTitleReady: (title: string) => void,
 ) {
   const [problem, setProblem] = useState<SessionProblem | null>(null);
+  const [notebookProblem, setNotebookProblem] = useState<SessionNotebookProblem | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isBlank, setIsBlank] = useState(false);
+  const [status, setStatus] = useState("not_started");
+  const [problemOverride, setProblemOverride] = useState<string | null>(null);
 
   const pendingBlankMigrationRef = useRef<{
     data: {
@@ -59,6 +65,7 @@ export function useSession(
     setIsLoadingSession(true);
     setSessionError(null);
     setProblem(null);
+    setNotebookProblem(null);
     setIsBlank(false);
 
     getSession(sessionId)
@@ -74,9 +81,21 @@ export function useSession(
         // Set title before setProblem() to prevent problem-sync effect override (R4)
         const initialTitle = sess.title ?? sess.problem?.title ?? DEFAULT_WHITEBOARD_TITLE;
         titleReadyRef.current(initialTitle);
+        setStatus(sess.status);
+        setProblemOverride(sess.problem_override ?? null);
 
         if (!sess.problem_id) {
-          setIsBlank(true);
+          if (sess.notebook_problem) {
+            setNotebookProblem({
+              id: sess.notebook_problem.id,
+              notebook_id: sess.notebook_problem.notebook_id,
+              title: sess.notebook_problem.title,
+              prompt: sess.notebook_problem.prompt ?? null,
+            });
+            setIsBlank(false);
+          } else {
+            setIsBlank(true);
+          }
           setIsLoadingSession(false);
 
           // One-time migration: capture any old blank-board localStorage data
@@ -153,9 +172,14 @@ export function useSession(
 
   return {
     problem,
+    notebookProblem,
     isLoadingSession,
     sessionError,
     isBlank,
+    status,
+    setStatus,
+    problemOverride,
+    setProblemOverride,
     pendingBlankMigrationRef,
   };
 }

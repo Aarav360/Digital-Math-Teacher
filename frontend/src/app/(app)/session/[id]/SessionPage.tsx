@@ -8,14 +8,16 @@ import {
   PenTool, Eraser, Undo2, Redo2, Trash2, Hand, ZoomIn, ZoomOut,
   Type, ChevronLeft, ChevronRight, Send, Check, X, AlertTriangle,
   ArrowLeft, Loader2, MousePointer2, Lasso, BoxSelect, ChevronDown,
-  Highlighter, Minus, Square, Circle, ArrowRight, Grid3X3, ImagePlus, Download,
+  Highlighter, Minus, Square, Circle, ArrowRight, Grid3X3, ImagePlus, Download, Pencil,
 } from "lucide-react";
 import type { StepFeedback } from "@/lib/data";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@/contexts/user-context";
-import { updateSessionTitle } from "@/lib/api";
+import { updateSessionTitle, updateSessionStatus, updateSessionProblemOverride, updateNotebookProblem } from "@/lib/api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { normalizeSessionStatus, SESSION_STATUS_COLORS, SESSION_STATUS_LABELS, type SessionStatusKey } from "@/lib/session-status";
 
 import type { Tool, Point, ShapeItem, Stroke } from "./types";
 import {
@@ -71,6 +73,9 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   // ── Title state (declared early so handleTitleReady is stable before useSession) ─
   const [whiteboardTitle, setWhiteboardTitle] = useState(DEFAULT_WHITEBOARD_TITLE);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isEditingProblem, setIsEditingProblem] = useState(false);
+  const [problemDraft, setProblemDraft] = useState("");
+  const [isSavingProblem, setIsSavingProblem] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleBeforeEditRef = useRef(DEFAULT_WHITEBOARD_TITLE);
   const titleLoadedRef = useRef(false);
@@ -169,6 +174,24 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     }
   }, [whiteboardTitle, sessionId]);
 
+  const normalizedStatus = normalizeSessionStatus(session.status);
+  const handleStatusChange = useCallback(
+    (nextStatus: SessionStatusKey) => {
+      session.setStatus(nextStatus);
+      if (!sessionId) return;
+      updateSessionStatus(sessionId, nextStatus)
+        .then((res) => {
+          if (res.ok) {
+            session.setStatus(res.data.status);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to update status:", err);
+        });
+    },
+    [sessionId, session],
+  );
+
   const cancelTitleEdit = useCallback(() => {
     setWhiteboardTitle(titleBeforeEditRef.current);
     setIsEditingTitle(false);
@@ -181,6 +204,53 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     },
     [saveTitle, cancelTitleEdit],
   );
+
+  useEffect(() => {
+    if (session.notebookProblem?.prompt) {
+      setProblemDraft(session.notebookProblem.prompt);
+      return;
+    }
+    if (session.problemOverride != null) {
+      setProblemDraft(session.problemOverride);
+      return;
+    }
+    if (session.problem?.statement) {
+      setProblemDraft(session.problem.statement);
+      return;
+    }
+    setProblemDraft("");
+  }, [session.notebookProblem?.prompt, session.problemOverride, session.problem?.statement]);
+
+  const handleSaveProblem = useCallback(async () => {
+    const trimmed = problemDraft.trim();
+    if (!sessionId) return;
+    setIsSavingProblem(true);
+    try {
+      if (session.notebookProblem) {
+        await updateNotebookProblem(session.notebookProblem.id, { prompt: trimmed });
+      } else {
+        const res = await updateSessionProblemOverride(sessionId, trimmed || null);
+        if (res.ok) {
+          session.setProblemOverride(res.data.problem_override ?? null);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to save problem text:", err);
+    } finally {
+      setIsSavingProblem(false);
+      setIsEditingProblem(false);
+    }
+  }, [problemDraft, session.notebookProblem, sessionId, session]);
+
+  const handleCancelProblem = useCallback(() => {
+    setProblemDraft(
+      session.notebookProblem?.prompt ??
+      session.problemOverride ??
+      session.problem?.statement ??
+      ""
+    );
+    setIsEditingProblem(false);
+  }, [session.notebookProblem?.prompt, session.problemOverride, session.problem?.statement]);
 
   // ── Orchestrator: multi-hook operations (Guardrail 5) ───────────────────
 
@@ -547,7 +617,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     );
   }
 
-  if (session.sessionError || (!session.isBlank && !session.problem && !session.isLoadingSession)) {
+  if (session.sessionError || (!session.isBlank && !session.problem && !session.notebookProblem && !session.isLoadingSession)) {
     return (
       <div className="h-full w-full flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center gap-4 text-center">
@@ -602,6 +672,17 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   };
 
   const { textItems, imageItems } = content.state;
+  const currentProblemText =
+    session.notebookProblem?.prompt ??
+    session.problemOverride ??
+    session.problem?.statement ??
+    "";
+  const statusOptions: SessionStatusKey[] = [
+    "not_started",
+    "in_progress",
+    "completed",
+    "needs_review",
+  ];
 
   // ── JSX ──────────────────────────────────────────────────────────────────
 
@@ -647,11 +728,38 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   </span>
                 </>
               )}
+              {!session.isBlank && !session.problem && session.notebookProblem && (
+                <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full shrink-0 border border-slate-200">
+                  Notebook Problem
+                </span>
+              )}
               {session.isBlank && (
                 <span className="px-2 py-0.5 bg-secondary text-muted-foreground text-xs rounded-full shrink-0 border border-border">
                   Free Whiteboard
                 </span>
               )}
+            </div>
+            <div className="shrink-0">
+              <Select value={normalizedStatus} onValueChange={(v) => handleStatusChange(v as SessionStatusKey)}>
+                <SelectTrigger size="sm" className="h-8 rounded-full px-3 border-slate-200 bg-white">
+                  <SelectValue>
+                    <span className="flex items-center gap-2 text-xs">
+                      <span className={`h-2 w-2 rounded-full ${SESSION_STATUS_COLORS[normalizedStatus]}`} />
+                      {SESSION_STATUS_LABELS[normalizedStatus]}
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {statusOptions.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      <span className="flex items-center gap-2 text-xs">
+                        <span className={`h-2 w-2 rounded-full ${SESSION_STATUS_COLORS[status]}`} />
+                        {SESSION_STATUS_LABELS[status]}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -914,10 +1022,47 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   <span className="text-xs text-muted-foreground">Saving...</span>
                 </div>
               )}
-              {!session.isBlank && session.problem && (
-                <div className="absolute top-4 left-4 bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs pointer-events-none select-none">
-                  <p className="text-xs text-muted-foreground mb-1">Problem</p>
-                  <p className="text-sm font-medium text-foreground whitespace-pre-line">{session.problem.statement}</p>
+              {(session.problem || session.notebookProblem || session.isBlank) && (
+                <div className="absolute top-4 left-4 bg-white/85 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs">
+                  <div className="relative mb-2 min-w-[120px]">
+                    <p className="text-xs text-muted-foreground text-center">Problem</p>
+                    <button
+                      type="button"
+                      className="absolute right-0 top-0 text-muted-foreground hover:text-foreground translate-x-[0.3rem]"
+                      onClick={() => setIsEditingProblem(true)}
+                      aria-label="Edit problem"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                  </div>
+                  {isEditingProblem ? (
+                    <div className="space-y-2">
+                      <textarea
+                        value={problemDraft}
+                        onChange={(e) => setProblemDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSaveProblem();
+                          }
+                        }}
+                        className="w-full text-sm text-foreground bg-white border border-slate-200 rounded-md p-2 resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
+                        rows={4}
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" onClick={handleSaveProblem} disabled={isSavingProblem}>
+                          {isSavingProblem ? "Saving..." : "Save"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={handleCancelProblem}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm font-medium text-foreground whitespace-pre-line text-center">
+                      {problemDraft}
+                    </p>
+                  )}
                 </div>
               )}
 

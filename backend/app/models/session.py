@@ -1,5 +1,5 @@
 """Session model (user working on a problem)."""
-from sqlalchemy import ForeignKey, String, Enum as SQLEnum
+from sqlalchemy import ForeignKey, String, Text, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 from app.models.base import Base, TimestampMixin
@@ -8,9 +8,8 @@ from app.models.base import Base, TimestampMixin
 class SessionStatus(str, enum.Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
-    EVALUATING = "evaluating"
-    FEEDBACK_READY = "feedback_ready"
     COMPLETED = "completed"
+    NEEDS_REVIEW = "needs_review"
 
 
 class Session(Base, TimestampMixin):
@@ -21,6 +20,7 @@ class Session(Base, TimestampMixin):
     problem_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("problems.id", ondelete="CASCADE"), nullable=True, index=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[SessionStatus] = mapped_column(SQLEnum(SessionStatus), default=SessionStatus.NOT_STARTED)
+    problem_override: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="sessions")
     problem: Mapped["Problem | None"] = relationship("Problem", back_populates="sessions")
@@ -32,4 +32,7 @@ class Session(Base, TimestampMixin):
     )
     chat_messages: Mapped[list["ChatMessage"]] = relationship(
         "ChatMessage", back_populates="session", lazy="selectin"
+    )
+    notebook_problem: Mapped["NotebookProblem | None"] = relationship(
+        "NotebookProblem", back_populates="session", uselist=False, lazy="selectin"
     )

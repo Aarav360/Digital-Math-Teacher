@@ -59,6 +59,13 @@ export type SessionProblem = {
   statement: string;
 };
 
+export type SessionNotebookProblem = {
+  id: string;
+  notebook_id: string;
+  title: string;
+  prompt: string | null;
+};
+
 export type HistoryEntry =
   | { kind: "stroke"; item: Stroke }
   | { kind: "shape"; item: ShapeItem }

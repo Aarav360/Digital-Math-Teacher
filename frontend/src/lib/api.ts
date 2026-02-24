@@ -106,6 +106,7 @@ export type SessionRead = {
   problem_id: string | null;
   title: string | null;
   status: string;
+  problem_override?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -113,6 +114,12 @@ export type SessionRead = {
 /** Backend session with embedded problem — matches SessionWithProblem schema. */
 export type SessionWithProblem = SessionRead & {
   problem?: ProblemRead | null;
+  notebook_problem?: {
+    id: string;
+    notebook_id: string;
+    title: string;
+    prompt: string | null;
+  } | null;
 };
 
 /** POST /api/v1/sessions — create a new session for a problem. */
@@ -144,6 +151,28 @@ export async function updateSessionTitle(
   });
 }
 
+/** PATCH /api/v1/sessions/{sessionId} — update the session's status. */
+export async function updateSessionStatus(
+  sessionId: string,
+  status: string
+): Promise<ApiResponse<SessionRead>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+/** PATCH /api/v1/sessions/{sessionId} — update problem overlay text. */
+export async function updateSessionProblemOverride(
+  sessionId: string,
+  problem_override: string | null
+): Promise<ApiResponse<SessionRead>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ problem_override }),
+  });
+}
+
 /** GET /api/v1/sessions/{sessionId} — fetch session (validates ownership). */
 export async function getSession(
   sessionId: string
@@ -161,6 +190,7 @@ export type SessionListEntry = {
   updated_at: string;
   problem_title: string | null;
   topic: string | null;
+  notebook_title?: string | null;
   steps_correct: number | null;
   steps_total: number | null;
 };
@@ -168,9 +198,113 @@ export type SessionListEntry = {
 /** GET /api/v1/sessions — list current user's sessions. */
 export async function listSessions(
   sort: string = "recent",
-  limit: number = 50
+  limit: number = 50,
+  includeNotebook: boolean = true
 ): Promise<ApiResponse<SessionListEntry[]>> {
-  return apiFetch(`/api/v1/sessions?sort=${encodeURIComponent(sort)}&limit=${limit}`);
+  const includeNotebookParam = includeNotebook ? "true" : "false";
+  return apiFetch(`/api/v1/sessions?sort=${encodeURIComponent(sort)}&limit=${limit}&include_notebook=${includeNotebookParam}`);
+}
+
+export type NotebookListEntry = {
+  id: string;
+  title: string;
+  updated_at: string;
+  problem_count: number;
+};
+
+export type NotebookProblem = {
+  id: string;
+  notebook_id: string;
+  session_id: string;
+  title: string;
+  prompt: string | null;
+  order_index: number;
+  source_metadata: Record<string, unknown> | null;
+  session_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NotebookRead = {
+  id: string;
+  title: string;
+  overall_prompt: string | null;
+  created_at: string;
+  updated_at: string;
+  problems: NotebookProblem[];
+};
+
+export async function listNotebooks(): Promise<ApiResponse<NotebookListEntry[]>> {
+  return apiFetch("/api/v1/notebooks");
+}
+
+export async function getNotebook(id: string): Promise<ApiResponse<NotebookRead>> {
+  return apiFetch(`/api/v1/notebooks/${id}`);
+}
+
+export async function createNotebook(payload: {
+  title: string;
+  overall_prompt?: string | null;
+  problems?: Array<{
+    title: string;
+    prompt?: string | null;
+    order_index?: number | null;
+    source_metadata?: Record<string, unknown> | null;
+  }>;
+}): Promise<ApiResponse<NotebookRead>> {
+  return apiFetch("/api/v1/notebooks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateNotebook(
+  id: string,
+  payload: { title?: string | null; overall_prompt?: string | null }
+): Promise<ApiResponse<NotebookRead>> {
+  return apiFetch(`/api/v1/notebooks/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function addNotebookProblems(
+  notebookId: string,
+  problems: Array<{
+    title: string;
+    prompt?: string | null;
+    order_index?: number | null;
+    source_metadata?: Record<string, unknown> | null;
+  }>
+): Promise<ApiResponse<NotebookProblem[]>> {
+  return apiFetch(`/api/v1/notebooks/${notebookId}/problems`, {
+    method: "POST",
+    body: JSON.stringify(problems),
+  });
+}
+
+export async function updateNotebookProblem(
+  problemId: string,
+  payload: { title?: string; prompt?: string | null; order_index?: number; source_metadata?: Record<string, unknown> | null }
+): Promise<ApiResponse<NotebookProblem>> {
+  return apiFetch(`/api/v1/notebooks/problems/${problemId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteNotebookProblem(problemId: string): Promise<ApiResponse<void>> {
+  return apiFetch(`/api/v1/notebooks/problems/${problemId}`, { method: "DELETE" });
+}
+
+export async function reorderNotebookProblems(
+  notebookId: string,
+  items: Array<{ id: string; order_index: number }>
+): Promise<ApiResponse<void>> {
+  return apiFetch(`/api/v1/notebooks/${notebookId}/problems/reorder`, {
+    method: "PATCH",
+    body: JSON.stringify({ items }),
+  });
 }
 
 /** GET /api/v1/problems — list with optional filters. Returns shape 1:1 with frontend (id, estimatedTime, etc.). */

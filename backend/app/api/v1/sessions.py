@@ -6,6 +6,8 @@ import sqlalchemy as sa
 
 from app.api.deps import CurrentUserId, CurrentUser, DbSession
 from app.models.session import Session, SessionStatus
+from app.models.notebook_problem import NotebookProblem
+from app.models.notebook import Notebook
 from app.models.problem import Problem
 from app.models.step import Step, StepEvaluation
 from app.models.canvas_snapshot import CanvasSnapshot
@@ -48,13 +50,18 @@ async def list_sessions(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     sort: str = Query("recent", description="recent | name | topic"),
+    include_notebook: bool = Query(True, description="Include sessions that belong to notebooks"),
 ):
     # LEFT OUTER JOIN so sessions with problem_id = NULL (blank boards) are included
     q = (
-        select(Session, Problem.title.label("problem_title"), Problem.topic)
+        select(Session, Problem.title.label("problem_title"), Problem.topic, Notebook.title.label("notebook_title"))
         .outerjoin(Problem, Session.problem_id == Problem.id)
+        .outerjoin(NotebookProblem, NotebookProblem.session_id == Session.id)
+        .outerjoin(Notebook, NotebookProblem.notebook_id == Notebook.id)
         .where(Session.user_id == user_id)
     )
+    if not include_notebook:
+        q = q.where(NotebookProblem.id.is_(None))
     if sort == "recent":
         q = q.order_by(Session.updated_at.desc())
     elif sort == "name":
@@ -73,7 +80,7 @@ async def list_sessions(
     # Build list with step counts (simplified: no subquery here, just session id)
     out = []
     for row in rows:
-        sess, problem_title, topic = row
+        sess, problem_title, topic, notebook_title = row
         # Optional: query steps_correct/total per session
         count_result = await db.execute(
             select(func.count(Step.id)).where(Step.session_id == sess.id)
@@ -96,6 +103,7 @@ async def list_sessions(
                 updated_at=sess.updated_at,
                 problem_title=problem_title,
                 topic=topic,
+                notebook_title=notebook_title,
                 steps_correct=steps_correct,
                 steps_total=steps_total,
             )
@@ -106,7 +114,10 @@ async def list_sessions(
 @router.get("/{session_id}", response_model=SessionWithProblem)
 async def get_session(session_id: str, user_id: CurrentUserId, db: DbSession):
     result = await db.execute(
-        select(Session).where(Session.id == session_id, Session.user_id == user_id).options(selectinload(Session.problem))
+        select(Session).where(Session.id == session_id, Session.user_id == user_id).options(
+            selectinload(Session.problem),
+            selectinload(Session.notebook_problem),
+        )
     )
     session = result.scalar_one_or_none()
     if session is None:
@@ -124,6 +135,8 @@ async def update_session(session_id: str, body: SessionUpdate, user_id: CurrentU
         session.status = SessionStatus(body.status)
     if body.title is not None:
         session.title = body.title.strip()[:512]
+    if body.problem_override is not None:
+        session.problem_override = body.problem_override
     await db.flush()
     await db.refresh(session)
     return session
@@ -157,6 +170,16 @@ async def save_snapshot(
     db.add(snapshot)
     await db.flush()
     await db.refresh(snapshot)
+
+    # Auto status: first real content flips to in_progress
+    if session.status == SessionStatus.NOT_STARTED:
+        strokes_json = body.strokes_json or {}
+        has_content = any(
+            bool(strokes_json.get(key)) for key in ("strokes", "shapes", "textItems", "imageItems")
+        )
+        if has_content:
+            session.status = SessionStatus.IN_PROGRESS
+            await db.flush()
     return snapshot
 
 
