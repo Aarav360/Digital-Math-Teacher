@@ -175,21 +175,25 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   }, [whiteboardTitle, sessionId]);
 
   const normalizedStatus = normalizeSessionStatus(session.status);
+  const { setStatus, status } = session;
   const handleStatusChange = useCallback(
-    (nextStatus: SessionStatusKey) => {
-      session.setStatus(nextStatus);
+    async (nextStatus: SessionStatusKey) => {
       if (!sessionId) return;
-      updateSessionStatus(sessionId, nextStatus)
-        .then((res) => {
-          if (res.ok) {
-            session.setStatus(res.data.status);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to update status:", err);
-        });
+      const previous = status;
+      setStatus(nextStatus);
+      try {
+        const res = await updateSessionStatus(sessionId, nextStatus);
+        if (res.ok) {
+          setStatus(res.data.status);
+        } else {
+          setStatus(previous);
+        }
+      } catch (err) {
+        setStatus(previous);
+        console.error("Failed to update status:", err);
+      }
     },
-    [sessionId, session],
+    [sessionId, setStatus, status],
   );
 
   const cancelTitleEdit = useCallback(() => {
@@ -206,6 +210,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   );
 
   useEffect(() => {
+    if (isEditingProblem) return;
     if (session.notebookProblem?.prompt) {
       setProblemDraft(session.notebookProblem.prompt);
       return;
@@ -219,25 +224,36 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
       return;
     }
     setProblemDraft("");
-  }, [session.notebookProblem?.prompt, session.problemOverride, session.problem?.statement]);
+  }, [isEditingProblem, session.notebookProblem?.prompt, session.problemOverride, session.problem?.statement]);
 
   const handleSaveProblem = useCallback(async () => {
     const trimmed = problemDraft.trim();
     if (!sessionId) return;
     setIsSavingProblem(true);
+    let saved = false;
     try {
       if (session.notebookProblem) {
-        await updateNotebookProblem(session.notebookProblem.id, { prompt: trimmed });
+        const res = await updateNotebookProblem(session.notebookProblem.id, { prompt: trimmed });
+        if (res.ok) {
+          saved = true;
+        } else {
+          console.error("Failed to save problem text:", res.error);
+        }
       } else {
         const res = await updateSessionProblemOverride(sessionId, trimmed || null);
         if (res.ok) {
           session.setProblemOverride(res.data.problem_override ?? null);
+          saved = true;
+        } else {
+          console.error("Failed to save problem text:", res.error);
         }
       }
     } catch (err) {
       console.error("Failed to save problem text:", err);
     } finally {
       setIsSavingProblem(false);
+    }
+    if (saved) {
       setIsEditingProblem(false);
     }
   }, [problemDraft, session.notebookProblem, sessionId, session]);

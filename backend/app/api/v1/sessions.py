@@ -53,54 +53,92 @@ async def list_sessions(
     include_notebook: bool = Query(True, description="Include sessions that belong to notebooks"),
 ):
     # LEFT OUTER JOIN so sessions with problem_id = NULL (blank boards) are included
-    q = (
-        select(Session, Problem.title.label("problem_title"), Problem.topic, Notebook.title.label("notebook_title"))
+    name_sort_key = func.coalesce(Session.title, Problem.title).label("name_sort_key")
+    topic_sort_key = sa.case(
+        (sa.or_(Problem.topic == sa.literal(""), Problem.topic.is_(None)), 1),
+        else_=0,
+    ).label("topic_sort_key")
+    base = (
+        select(
+            Session.id.label("id"),
+            Session.problem_id.label("problem_id"),
+            Session.title.label("title"),
+            Session.status.label("status"),
+            Session.created_at.label("created_at"),
+            Session.updated_at.label("updated_at"),
+            Problem.title.label("problem_title"),
+            Problem.topic.label("topic"),
+            Notebook.title.label("notebook_title"),
+            name_sort_key,
+            topic_sort_key,
+        )
         .outerjoin(Problem, Session.problem_id == Problem.id)
         .outerjoin(NotebookProblem, NotebookProblem.session_id == Session.id)
         .outerjoin(Notebook, NotebookProblem.notebook_id == Notebook.id)
         .where(Session.user_id == user_id)
     )
     if not include_notebook:
-        q = q.where(NotebookProblem.id.is_(None))
+        base = base.where(NotebookProblem.id.is_(None))
     if sort == "recent":
-        q = q.order_by(Session.updated_at.desc())
+        order_by_base = [Session.updated_at.desc()]
     elif sort == "name":
         # COALESCE: use session's own title first, fall back to problem title
-        q = q.order_by(func.coalesce(Session.title, Problem.title))
+        order_by_base = [name_sort_key.asc()]
     elif sort == "topic":
         # Blank sessions (no topic) sort last; use CASE to push empty strings after real topics
-        q = q.order_by(
-            sa.case((sa.or_(Problem.topic == sa.literal(""), Problem.topic.is_(None)), 1), else_=0),
-            Problem.topic.asc(),
-            Session.updated_at.desc(),
-        )
-    q = q.offset(offset).limit(limit)
+        order_by_base = [topic_sort_key.asc(), Problem.topic.asc(), Session.updated_at.desc()]
+    else:
+        order_by_base = [Session.updated_at.desc()]
+
+    base = base.add_columns(
+        sa.func.row_number().over(partition_by=Session.id, order_by=order_by_base).label("rn")
+    )
+    subq = base.subquery()
+    if sort == "recent":
+        order_by_outer = [subq.c.updated_at.desc()]
+    elif sort == "name":
+        order_by_outer = [subq.c.name_sort_key.asc()]
+    elif sort == "topic":
+        order_by_outer = [subq.c.topic_sort_key.asc(), subq.c.topic.asc(), subq.c.updated_at.desc()]
+    else:
+        order_by_outer = [subq.c.updated_at.desc()]
+    q = (
+        select(subq)
+        .where(subq.c.rn == 1)
+        .order_by(*order_by_outer)
+        .offset(offset)
+        .limit(limit)
+    )
     result = await db.execute(q)
     rows = result.all()
     # Build list with step counts (simplified: no subquery here, just session id)
     out = []
     for row in rows:
-        sess, problem_title, topic, notebook_title = row
+        sess_id = row.id
+        problem_title = row.problem_title
+        topic = row.topic
+        notebook_title = row.notebook_title
+        status_value = row.status.value if isinstance(row.status, SessionStatus) else row.status
         # Optional: query steps_correct/total per session
         count_result = await db.execute(
-            select(func.count(Step.id)).where(Step.session_id == sess.id)
+            select(func.count(Step.id)).where(Step.session_id == sess_id)
         )
         steps_total = count_result.scalar() or 0
         correct_result = await db.execute(
             select(func.count(StepEvaluation.id))
             .select_from(StepEvaluation)
             .join(Step, StepEvaluation.step_id == Step.id)
-            .where(Step.session_id == sess.id, StepEvaluation.status == "correct")
+            .where(Step.session_id == sess_id, StepEvaluation.status == "correct")
         )
         steps_correct = correct_result.scalar() or 0
         out.append(
             SessionListEntry(
-                id=sess.id,
-                problem_id=sess.problem_id,
-                title=sess.title,
-                status=sess.status.value,
-                created_at=sess.created_at,
-                updated_at=sess.updated_at,
+                id=sess_id,
+                problem_id=row.problem_id,
+                title=row.title,
+                status=status_value,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
                 problem_title=problem_title,
                 topic=topic,
                 notebook_title=notebook_title,

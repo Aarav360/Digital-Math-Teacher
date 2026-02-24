@@ -40,12 +40,12 @@ class NotebookProblemReorder(BaseModel):
 class NotebookProblemRead(BaseModel):
     id: str
     notebook_id: str
-    session_id: str
+    session_id: str | None
     title: str
     prompt: str | None = None
     order_index: int
     source_metadata: dict | None = None
-    session_status: str
+    session_status: str | None
     created_at: datetime
     updated_at: datetime
 

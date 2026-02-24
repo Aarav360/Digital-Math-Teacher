@@ -99,16 +99,21 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
   const saveNotebookMeta = useCallback(async () => {
     if (!notebook) return;
     setIsSaving(true);
-    const res = await updateNotebook(notebook.id, {
-      title: notebook.title,
-      overall_prompt: notebook.overall_prompt,
-    });
-    if (!res.ok) {
-      toast.error(res.error || "Failed to save notebook.");
-    } else {
-      setNotebook(res.data);
+    try {
+      const res = await updateNotebook(notebook.id, {
+        title: notebook.title,
+        overall_prompt: notebook.overall_prompt,
+      });
+      if (!res.ok) {
+        toast.error(res.error || "Failed to save notebook.");
+      } else {
+        setNotebook(res.data);
+      }
+    } catch (err) {
+      toast.error((err as Error).message || "Failed to save notebook.");
+    } finally {
+      setIsSaving(false);
     }
-    setIsSaving(false);
   }, [notebook]);
 
   const handleAddSingle = async () => {
@@ -120,20 +125,25 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
       return;
     }
     setIsAdding(true);
-    const res = await addNotebookProblems(notebook.id, [
-      {
-        title: trimmedTitle || `Problem ${problems.length + 1}`,
-        prompt: trimmedPrompt,
-      },
-    ]);
-    if (res.ok) {
-      setNotebook({ ...notebook, problems: [...notebook.problems, ...res.data] });
-      setSingleTitle("");
-      setSinglePrompt("");
-    } else {
-      toast.error(res.error || "Failed to add problem.");
+    try {
+      const res = await addNotebookProblems(notebook.id, [
+        {
+          title: trimmedTitle || `Problem ${problems.length + 1}`,
+          prompt: trimmedPrompt,
+        },
+      ]);
+      if (res.ok) {
+        setNotebook({ ...notebook, problems: [...notebook.problems, ...res.data] });
+        setSingleTitle("");
+        setSinglePrompt("");
+      } else {
+        toast.error(res.error || "Failed to add problem.");
+      }
+    } catch (err) {
+      toast.error((err as Error).message || "Failed to add problem.");
+    } finally {
+      setIsAdding(false);
     }
-    setIsAdding(false);
   };
 
   const handleAddBatch = async () => {
@@ -144,46 +154,57 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
       return;
     }
     setIsAdding(true);
-    const ordered = applyTextbookOrdering(
-      parsed.map((p) => ({
-        ...p,
-        source_ref: p.source_ref ?? null,
-      }))
-    );
-    const res = await addNotebookProblems(
-      notebook.id,
-      ordered.map((p) => ({
-        title: p.title,
-        prompt: p.prompt,
-        order_index: p.order_index,
-        source_metadata: p.source_ref ? { source_ref: p.source_ref } : null,
-      }))
-    );
-    if (res.ok) {
-      const merged = applyTextbookOrdering([
-        ...notebook.problems.map((p) => ({
+    try {
+      const ordered = applyTextbookOrdering(
+        parsed.map((p) => ({
           ...p,
-          source_ref: p.source_metadata?.source_ref as string | undefined,
-        })),
-        ...res.data.map((p) => ({
-          ...p,
-          source_ref: p.source_metadata?.source_ref as string | undefined,
-        })),
-      ]);
-      const updated = merged.map((p) => ({
-        ...p,
-        order_index: p.order_index ?? 0,
-      })) as NotebookProblem[];
-      setNotebook({ ...notebook, problems: updated });
-      await reorderNotebookProblems(
-        notebook.id,
-        updated.map((p) => ({ id: p.id, order_index: p.order_index }))
+          source_ref: p.source_ref ?? null,
+        }))
       );
-      setBatchText("");
-    } else {
-      toast.error(res.error || "Failed to add problems.");
+      const res = await addNotebookProblems(
+        notebook.id,
+        ordered.map((p) => ({
+          title: p.title,
+          prompt: p.prompt,
+          order_index: p.order_index,
+          source_metadata: p.source_ref ? { source_ref: p.source_ref } : null,
+        }))
+      );
+      if (res.ok) {
+        const previous = notebook.problems;
+        const merged = applyTextbookOrdering([
+          ...notebook.problems.map((p) => ({
+            ...p,
+            source_ref: p.source_metadata?.source_ref as string | undefined,
+          })),
+          ...res.data.map((p) => ({
+            ...p,
+            source_ref: p.source_metadata?.source_ref as string | undefined,
+          })),
+        ]);
+        const updated = merged.map((p) => ({
+          ...p,
+          order_index: p.order_index ?? 0,
+        })) as NotebookProblem[];
+        setNotebook({ ...notebook, problems: updated });
+        const reorderRes = await reorderNotebookProblems(
+          notebook.id,
+          updated.map((p) => ({ id: p.id, order_index: p.order_index }))
+        );
+        if (!reorderRes.ok) {
+          setNotebook({ ...notebook, problems: previous });
+          toast.error(reorderRes.error || "Failed to reorder problems.");
+        } else {
+          setBatchText("");
+        }
+      } else {
+        toast.error(res.error || "Failed to add problems.");
+      }
+    } catch (err) {
+      toast.error((err as Error).message || "Failed to add problems.");
+    } finally {
+      setIsAdding(false);
     }
-    setIsAdding(false);
   };
 
   const handleRemoveProblem = async (problem: NotebookProblem) => {
@@ -223,12 +244,23 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
     const [moved] = current.splice(fromIndex, 1);
     current.splice(toIndex, 0, moved);
     const reordered = current.map((p, index) => ({ ...p, order_index: index }));
+    const previous = notebook.problems;
     setNotebook({ ...notebook, problems: reordered });
-    setDraggingId(null);
-    await reorderNotebookProblems(
-      notebook.id,
-      reordered.map((p) => ({ id: p.id, order_index: p.order_index }))
-    );
+    try {
+      const res = await reorderNotebookProblems(
+        notebook.id,
+        reordered.map((p) => ({ id: p.id, order_index: p.order_index }))
+      );
+      if (!res.ok) {
+        setNotebook({ ...notebook, problems: previous });
+        toast.error(res.error || "Failed to reorder problems.");
+      }
+    } catch (err) {
+      setNotebook({ ...notebook, problems: previous });
+      toast.error((err as Error).message || "Failed to reorder problems.");
+    } finally {
+      setDraggingId(null);
+    }
   };
 
   const handleDragOver = (event: React.DragEvent) => {
@@ -359,6 +391,7 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
                 className="p-4 flex items-start gap-3 border border-slate-200 bg-white"
                 draggable
                 onDragStart={() => handleDragStart(problem.id)}
+                onDragEnd={() => setDraggingId(null)}
                 onDragOver={handleDragOver}
                 onDrop={() => handleDrop(problem.id)}
               >
@@ -378,13 +411,23 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
                     {problem.prompt || "No prompt provided."}
                   </p>
                   <div className="mt-3 flex items-center gap-3 text-xs">
-                    <Link
-                      href={`/session/${problem.session_id}`}
-                      className="text-primary hover:underline inline-flex items-center gap-1"
-                    >
-                      <BookOpen className="size-3" />
-                      Open whiteboard
-                    </Link>
+                    {problem.session_id ? (
+                      <Link
+                        href={`/session/${problem.session_id}`}
+                        className="text-primary hover:underline inline-flex items-center gap-1"
+                      >
+                        <BookOpen className="size-3" />
+                        Open whiteboard
+                      </Link>
+                    ) : (
+                      <span
+                        className="text-muted-foreground inline-flex items-center gap-1 opacity-60"
+                        aria-disabled="true"
+                      >
+                        <BookOpen className="size-3" />
+                        No whiteboard
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1"

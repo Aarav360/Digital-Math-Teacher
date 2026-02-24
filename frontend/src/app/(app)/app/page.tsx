@@ -175,8 +175,8 @@ function NotebookTemplateCard() {
   return (
     <Link href="/notebooks/new" className="group shrink-0 flex flex-col items-center">
       <div className="w-[132px] h-[96px] rounded-md border border-border bg-card flex items-center justify-center transition-all group-hover:shadow-md overflow-hidden">
-        <div className="w-12 h-12 rounded-full border-2 border-slate-300 bg-slate-50 flex items-center justify-center group-hover:border-primary/40 group-hover:bg-primary/5 transition-colors">
-          <BookOpen className="size-6 text-slate-500 group-hover:text-primary/70 transition-colors" />
+        <div className="w-12 h-12 rounded-full border-2 border-border bg-card flex items-center justify-center group-hover:border-primary/40 group-hover:bg-primary/5 transition-colors">
+          <BookOpen className="size-6 text-muted-foreground group-hover:text-primary/70 transition-colors" />
         </div>
       </div>
       <p className="text-xs text-foreground mt-2 text-center w-[132px] truncate">
@@ -303,9 +303,9 @@ function NotebookCard({ notebook }: { notebook: NotebookListEntry }) {
     <div className="group flex flex-col">
       <Link href={`/notebooks/${notebook.id}`} className="block">
         <div className="aspect-[4/3] rounded-t-md border border-border bg-card overflow-hidden relative transition-all group-hover:border-primary/30 group-hover:shadow-md">
-          <div className="absolute inset-0 bg-gradient-to-br from-white via-white to-slate-50" />
+          <div className="absolute inset-0 bg-gradient-to-br from-card via-card to-muted/40" />
           <div className="absolute top-3 left-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="inline-flex h-2 w-2 rounded-full bg-slate-400" />
+            <span className="inline-flex h-2 w-2 rounded-full bg-muted-foreground/60" />
             Notebook
           </div>
           <div className="absolute bottom-3 left-3 right-3">
@@ -541,7 +541,7 @@ export default function DashboardPage() {
             <button
               type="button"
               className="text-xs text-primary hover:underline"
-              onClick={fetchSessions}
+              onClick={fetchDashboard}
             >
               Retry
             </button>

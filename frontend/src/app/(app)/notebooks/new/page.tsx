@@ -102,7 +102,7 @@ export default function NewNotebookPage() {
       <div className="relative z-10">
         <div className="flex items-center gap-3 mb-6">
           <Link href="/app">
-            <Button variant="ghost" size="icon-sm" className="rounded-full">
+            <Button variant="ghost" size="icon-sm" className="rounded-full" aria-label="Back to notebooks">
               <ArrowLeft className="size-4" />
             </Button>
           </Link>
@@ -207,14 +207,14 @@ export default function NewNotebookPage() {
               }`}
             >
               {problems.length === 0 && (
-                <div className="text-xs text-muted-foreground border border-dashed border-slate-200 rounded-lg p-4 text-center">
+                <div className="text-xs text-muted-foreground border border-dashed border-border rounded-lg p-4 text-center">
                   No problems yet. Add a single problem or paste a batch.
                 </div>
               )}
               {problems.map((problem, index) => (
                 <div
                   key={`${problem.title}-${index}`}
-                  className="border border-slate-200 rounded-lg p-3 bg-white flex items-start gap-3"
+                  className="border border-border rounded-lg p-3 bg-card flex items-start gap-3"
                 >
                   <span className="text-xs text-muted-foreground mt-1">{index + 1}</span>
                   <div className="min-w-0 flex-1">

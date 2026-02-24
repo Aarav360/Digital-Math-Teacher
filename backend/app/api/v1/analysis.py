@@ -81,4 +81,11 @@ async def analyze_steps(body: AnalysisRequest, user_id: CurrentUserId, db: DbSes
         )
         for s in steps
     ]
-    return AnalysisResponse(steps=step_reads, summary=f"{len(step_reads)} steps analyzed.")
+    created_count = steps_created or 0
+    total_count = len(step_reads)
+    existing_count = max(total_count - created_count, 0)
+    if total_count == 0:
+        summary = "No steps available."
+    else:
+        summary = f"{created_count} new steps created, {existing_count} existing steps returned."
+    return AnalysisResponse(steps=step_reads, summary=summary)

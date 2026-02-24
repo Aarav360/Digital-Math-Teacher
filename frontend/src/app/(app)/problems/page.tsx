@@ -33,7 +33,7 @@ function getInitialFilterStateFromUrl(searchParams: URLSearchParams | null): Fil
   if (!searchParams) return defaultFilterState;
   const topicParam = searchParams.get("topic");
   if (!topicParam || topicParam === "Any") return defaultFilterState;
-  const topic = decodeURIComponent(topicParam).trim();
+  const topic = (topicParam ?? "").trim();
   if (!topic) return defaultFilterState;
   const topicList =
     topic === "Algebra 1"
@@ -212,6 +212,7 @@ export default function ProblemsPage() {
               <button
                 key={t}
                 onClick={(e) => handleChipClick("topic", value, e)}
+                aria-pressed={selected}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                   selected
                     ? "bg-primary text-white"
@@ -227,6 +228,7 @@ export default function ProblemsPage() {
           <span className="text-xs text-muted-foreground py-1.5 w-14 shrink-0">Level</span>
           <button
             onClick={(e) => handleChipClick("level", "ALL", e)}
+            aria-pressed={filters.level.includes("ALL")}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
               filters.level.includes("ALL")
                 ? "bg-primary text-white"
@@ -242,6 +244,7 @@ export default function ProblemsPage() {
               <button
                 key={d}
                 onClick={(e) => handleChipClick("level", value, e)}
+                aria-pressed={selected}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                   selected
                     ? "bg-primary text-white"
@@ -262,6 +265,7 @@ export default function ProblemsPage() {
               <button
                 key={pt}
                 onClick={(e) => handleChipClick("type", value, e)}
+                aria-pressed={selected}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                   selected
                     ? "bg-primary text-white"

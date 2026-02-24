@@ -103,7 +103,7 @@ function statusBadge(status: string) {
 
 function statusLabel(status: string) {
   const normalized = normalizeSessionStatus(status);
-  return SESSION_STATUS_LABELS[normalized];
+  return SESSION_STATUS_LABELS[normalized] ?? SESSION_STATUS_LABELS.not_started;
 }
 
 export default function HistoryPage() {
@@ -113,7 +113,7 @@ export default function HistoryPage() {
 
   useEffect(() => {
     setLoading(true);
-    listSessions("recent", 100)
+    listSessions("recent", 100, true)
       .then((res) => {
         if (res.ok) {
           setSessions(res.data);
@@ -184,9 +184,10 @@ export default function HistoryPage() {
             </span>
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Clock className="size-3" />
-              {new Date(session.updated_at).toLocaleString("en-US", {
+              {new Date(session.updated_at).toLocaleString(undefined, {
                 month: "short",
                 day: "numeric",
+                year: "numeric",
                 hour: "numeric",
                 minute: "2-digit",
               })}

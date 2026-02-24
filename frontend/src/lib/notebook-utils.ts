@@ -9,7 +9,14 @@ type ParsedProblem = DraftNotebookProblem & {
   order_key?: number[];
 };
 
-const REF_PATTERN = /^(\d+(?:\.\d+)*)(?:\s*[-:])?\s*(.*)$/;
+const REF_PATTERN = /^(\d+(?:\.\d+)*)(?:\s*[-:]\s*)(.*)$/;
+
+function deriveOrderKey(ref: string): number[] {
+  return ref
+    .split(".")
+    .map((n) => Number.parseInt(n, 10))
+    .filter((n) => !Number.isNaN(n));
+}
 
 export function parseBatchProblems(raw: string): ParsedProblem[] {
   const lines = raw
@@ -27,7 +34,7 @@ export function parseBatchProblems(raw: string): ParsedProblem[] {
         title: `Problem ${ref}`,
         prompt,
         source_ref: ref,
-        order_key: ref.split(".").map((n) => Number.parseInt(n, 10)).filter((n) => !Number.isNaN(n)),
+        order_key: deriveOrderKey(ref),
       };
     }
     return {
@@ -50,15 +57,12 @@ function compareOrderKey(a: number[] = [], b: number[] = []) {
 
 export function applyTextbookOrdering<T extends { source_ref?: string | null; order_index?: number; auto_title?: boolean; title?: string }>(
   problems: T[]
-): T[] {
+): Array<T & { order_index: number; title: string }> {
   const withRef = problems
     .filter((p) => p.source_ref)
     .map((p) => ({
       problem: p,
-      order_key: String(p.source_ref)
-        .split(".")
-        .map((n) => Number.parseInt(n, 10))
-        .filter((n) => !Number.isNaN(n)),
+      order_key: deriveOrderKey(String(p.source_ref)),
     }))
     .sort((a, b) => compareOrderKey(a.order_key, b.order_key))
     .map((item) => item.problem);
@@ -68,7 +72,7 @@ export function applyTextbookOrdering<T extends { source_ref?: string | null; or
   let autoCounter = 1;
   return ordered.map((p, index) => {
     const shouldAutoTitle = p.auto_title === true;
-    const nextTitle = shouldAutoTitle ? `Problem ${autoCounter++}` : p.title;
+    const nextTitle = shouldAutoTitle ? `Problem ${autoCounter++}` : (p.title ?? "");
     return {
       ...p,
       title: nextTitle,

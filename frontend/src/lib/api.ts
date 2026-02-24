@@ -199,7 +199,7 @@ export type SessionListEntry = {
 export async function listSessions(
   sort: string = "recent",
   limit: number = 50,
-  includeNotebook: boolean = true
+  includeNotebook: boolean = false
 ): Promise<ApiResponse<SessionListEntry[]>> {
   const includeNotebookParam = includeNotebook ? "true" : "false";
   return apiFetch(`/api/v1/sessions?sort=${encodeURIComponent(sort)}&limit=${limit}&include_notebook=${includeNotebookParam}`);
@@ -215,12 +215,12 @@ export type NotebookListEntry = {
 export type NotebookProblem = {
   id: string;
   notebook_id: string;
-  session_id: string;
+  session_id: string | null;
   title: string;
   prompt: string | null;
   order_index: number;
   source_metadata: Record<string, unknown> | null;
-  session_status: string;
+  session_status: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -17,7 +17,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add new enum value for needs_review (idempotent for Postgres)
-    op.execute("ALTER TYPE sessionstatus ADD VALUE IF NOT EXISTS 'NEEDS_REVIEW'")
+    # NOTE: ALTER TYPE must run outside a transaction in Postgres.
+    with op.get_context().autocommit_block():
+        op.execute("ALTER TYPE sessionstatus ADD VALUE IF NOT EXISTS 'NEEDS_REVIEW'")
 
     # Normalize legacy statuses to in_progress
     op.execute(
@@ -39,13 +41,15 @@ def upgrade() -> None:
         "notebook_problems",
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("notebook_id", sa.String(length=36), sa.ForeignKey("notebooks.id", ondelete="CASCADE"), index=True, nullable=False),
-        sa.Column("session_id", sa.String(length=36), sa.ForeignKey("sessions.id", ondelete="CASCADE"), index=True, nullable=False),
+        # Preserve notebook rows if a session is deleted by nulling session_id.
+        sa.Column("session_id", sa.String(length=36), sa.ForeignKey("sessions.id", ondelete="SET NULL"), index=True, nullable=True),
         sa.Column("title", sa.String(length=256), nullable=False),
         sa.Column("prompt", sa.Text(), nullable=True),
         sa.Column("order_index", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("source_metadata", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.UniqueConstraint("session_id", name="uq_notebook_problems_session_id"),
     )
 
 

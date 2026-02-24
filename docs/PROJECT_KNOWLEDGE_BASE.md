@@ -33,6 +33,7 @@
 - Prefer immutable snapshot writes for canvas persistence; do not mutate existing snapshots.
 - Enforce ownership checks in backend routes using deps and session user_id filters.
 - Add Alembic migrations for any DB schema change.
+- Validate JSONB payloads like `strokes_json` at ingest (schema + size limits), with a backfill/compat plan for existing records.
 
 ## Patterns To Avoid
 - Bypassing `useWhiteboardHistory` to mutate canvas state directly.
@@ -47,5 +48,6 @@
 - Whiteboard persistence:
   - `useSnapshotPersistence` assumes snapshot JSON shape with keys `strokes`, `shapes`, `textItems`, `imageItems`.
   - Backend stores `strokes_json` as JSONB without validation, so client shape changes are breaking.
+  - Planned fix: add server-side schema validation and max-size enforcement for `strokes_json`, plus a compatibility window to normalize/backfill existing rows. Owner: Backend. Target: 2026-04-30.
 - Session status lifecycle is assumed by analysis flow and UI; changing enum values affects both sides.
 - LocalStorage migration keys use `WHITEBOARD_STORAGE_KEY_PREFIX` and user id; changes break migration.

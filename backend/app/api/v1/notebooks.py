@@ -25,7 +25,7 @@ router = APIRouter(prefix="/notebooks", tags=["notebooks"])
 async def _build_notebook_read(db: DbSession, notebook: Notebook) -> NotebookRead:
     problems_result = await db.execute(
         select(NotebookProblem, Session)
-        .join(Session, NotebookProblem.session_id == Session.id)
+        .outerjoin(Session, NotebookProblem.session_id == Session.id)
         .where(NotebookProblem.notebook_id == notebook.id)
         .order_by(NotebookProblem.order_index.asc())
     )
@@ -40,7 +40,7 @@ async def _build_notebook_read(db: DbSession, notebook: Notebook) -> NotebookRea
                 prompt=problem.prompt,
                 order_index=problem.order_index,
                 source_metadata=problem.source_metadata,
-                session_status=session.status.value,
+                session_status=session.status.value if session else None,
                 created_at=problem.created_at,
                 updated_at=problem.updated_at,
             )
@@ -117,8 +117,21 @@ async def create_notebook(body: NotebookCreate, user_id: CurrentUserId, db: DbSe
     await db.flush()
 
     problems = body.problems or []
+    effective_indices: list[int] = []
+    seen_indices: set[int] = set()
+    duplicate_indices: set[int] = set()
     for idx, problem in enumerate(problems):
         order_index = problem.order_index if problem.order_index is not None else idx
+        if order_index in seen_indices:
+            duplicate_indices.add(order_index)
+        seen_indices.add(order_index)
+        effective_indices.append(order_index)
+    if duplicate_indices:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"duplicate_order_index": sorted(duplicate_indices)},
+        )
+    for problem, order_index in zip(problems, effective_indices):
         await _create_problem(db, user_id, notebook, problem, order_index)
 
     await db.refresh(notebook)
@@ -224,24 +237,34 @@ async def update_notebook_problem(
         .where(NotebookProblem.id == problem_id)
     )
     problem = result.scalar_one_or_none()
-    if problem is None or problem.notebook.user_id != user_id:
+    if problem is None or problem.notebook is None or problem.notebook.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Problem not found")
+    notebook = problem.notebook
+    changed = False
     if body.title is not None:
         problem.title = body.title.strip()[:256]
+        changed = True
     if body.prompt is not None:
         problem.prompt = body.prompt
+        changed = True
     if body.order_index is not None:
         problem.order_index = body.order_index
+        changed = True
     if body.source_metadata is not None:
         problem.source_metadata = body.source_metadata
+        changed = True
+    if changed:
+        notebook.updated_at = utc_now()
     await db.flush()
     await db.refresh(problem)
 
-    session_result = await db.execute(select(Session).where(Session.id == problem.session_id))
-    session = session_result.scalar_one()
-    if body.title is not None:
-        session.title = problem.title
-        await db.flush()
+    session = None
+    if problem.session_id:
+        session_result = await db.execute(select(Session).where(Session.id == problem.session_id))
+        session = session_result.scalar_one_or_none()
+        if session is not None and body.title is not None:
+            session.title = problem.title
+            await db.flush()
     return NotebookProblemRead(
         id=problem.id,
         notebook_id=problem.notebook_id,
@@ -250,7 +273,7 @@ async def update_notebook_problem(
         prompt=problem.prompt,
         order_index=problem.order_index,
         source_metadata=problem.source_metadata,
-        session_status=session.status.value,
+        session_status=session.status.value if session else None,
         created_at=problem.created_at,
         updated_at=problem.updated_at,
     )
@@ -264,11 +287,12 @@ async def delete_notebook_problem(problem_id: str, user_id: CurrentUserId, db: D
         .where(NotebookProblem.id == problem_id)
     )
     problem = result.scalar_one_or_none()
-    if problem is None or problem.notebook.user_id != user_id:
+    if problem is None or problem.notebook is None or problem.notebook.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Problem not found")
     session_id = problem.session_id
+    notebook = problem.notebook
     await db.delete(problem)
-    problem.notebook.updated_at = utc_now()
+    notebook.updated_at = utc_now()
     if session_id:
         session_result = await db.execute(
             select(Session).where(Session.id == session_id, Session.user_id == user_id)
@@ -301,9 +325,14 @@ async def reorder_notebook_problems(
         .where(NotebookProblem.notebook_id == notebook.id, NotebookProblem.id.in_(ids))
     )
     problems = {p.id: p for p in problems_result.scalars().all()}
+    unknown_ids = [item.id for item in body.items if item.id not in problems]
+    if unknown_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"unknown_ids": unknown_ids},
+        )
     for item in body.items:
-        if item.id in problems:
-            problems[item.id].order_index = item.order_index
+        problems[item.id].order_index = item.order_index
     notebook.updated_at = utc_now()
     await db.flush()
     return None
