@@ -13,6 +13,7 @@ export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  latex?: string;
   timestamp: string;
 };
 

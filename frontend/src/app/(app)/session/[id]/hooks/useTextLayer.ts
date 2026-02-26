@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import type { MathfieldElement } from "mathlive";
 import type { TextItem } from "../types";
 import type { WhiteboardContent } from "./useWhiteboardContent";
 import type { ViewTransform } from "./useViewTransform";
@@ -27,8 +28,13 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
     y: number;
     id?: string;
     initialText?: string;
+    initialLatex?: string;
   } | null>(null);
-  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const mathFieldRef = useRef<MathfieldElement>(null);
+  const [textEditValue, setTextEditValue] = useState<{ latex: string; text: string }>({
+    latex: "",
+    text: "",
+  });
 
   // Hover / drag state
   const [hoveredTextId, setHoveredTextId] = useState<string | null>(null);
@@ -50,10 +56,30 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
   useEffect(() => {
     if (textEditState !== null) {
       const id = requestAnimationFrame(() => {
-        textAreaRef.current?.focus();
+        const field = mathFieldRef.current;
+        if (!field) return;
+        if (typeof field.focus === "function") {
+          try {
+            // Avoid recentering/scroll jumps when focusing a new text box.
+            field.focus({ preventScroll: true } as FocusOptions);
+          } catch {
+            field.focus();
+          }
+        }
       });
       return () => cancelAnimationFrame(id);
     }
+  }, [textEditState]);
+
+  useEffect(() => {
+    if (!textEditState) {
+      setTextEditValue({ latex: "", text: "" });
+      return;
+    }
+    setTextEditValue({
+      latex: textEditState.initialLatex ?? textEditState.initialText ?? "",
+      text: textEditState.initialText ?? "",
+    });
   }, [textEditState]);
 
   // Global cursor while dragging
@@ -66,35 +92,46 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
   }, [draggingTextId]);
 
   const commitTextOverlay = useCallback(() => {
-    const value = textAreaRef.current?.value?.trim() ?? "";
+    const latexValue = textEditValue.latex.trim();
+    const plainValue = textEditValue.text.trim();
     if (!textEditState) {
       setTextEditState(null);
       return;
     }
     if (textEditState.id) {
       const prevText = textEditState.initialText ?? "";
-      if (value) {
-        if (value !== prevText) history.editText(textEditState.id, prevText, value);
+      const prevLatex = textEditState.initialLatex;
+      if (plainValue || latexValue) {
+        if (plainValue !== prevText || latexValue !== prevLatex) {
+          history.editText(
+            textEditState.id,
+            prevText,
+            plainValue,
+            prevLatex,
+            latexValue,
+          );
+        }
       } else {
         const item = content.state.textItems.find((t) => t.id === textEditState.id);
         if (item) {
           history.deleteItems({ strokes: [], shapes: [], textItems: [item], imageItems: [] });
         }
       }
-    } else if (value) {
+    } else if (plainValue || latexValue) {
       const baselineOffset = 14;
       const newText: TextItem = {
         id: crypto.randomUUID(),
         x: textEditState.x,
         y: textEditState.y + baselineOffset,
-        text: value,
+        text: plainValue || latexValue,
+        latex: latexValue || undefined,
         color: penColor,
         fontSize: 16,
       };
       history.addText(newText);
     }
     setTextEditState(null);
-  }, [textEditState, penColor, history, content.state.textItems]);
+  }, [textEditState, textEditValue, penColor, history, content.state.textItems]);
 
   /** Hit test: is (clientX, clientY) in the 8px perimeter of a text item? */
   const getTextHit = useCallback(
@@ -193,7 +230,9 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
   return {
     textEditState,
     setTextEditState,
-    textAreaRef,
+    mathFieldRef,
+    textEditValue,
+    setTextEditValue,
     hoveredTextId,
     setHoveredTextId,
     hoveredInDragZone,

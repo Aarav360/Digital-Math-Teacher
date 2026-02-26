@@ -18,7 +18,14 @@ type ResizeImageEntry = {
   oldBounds: { x: number; y: number; width: number; height: number };
   newBounds: { x: number; y: number; width: number; height: number };
 };
-type EditTextEntry = { kind: "editText"; id: string; prevText: string; nextText: string };
+type EditTextEntry = {
+  kind: "editText";
+  id: string;
+  prevText: string;
+  nextText: string;
+  prevLatex?: string;
+  nextLatex?: string;
+};
 
 type ExtendedHistoryEntry = HistoryEntry | MoveTextEntry | MoveImageEntry | ResizeImageEntry | EditTextEntry;
 
@@ -80,9 +87,17 @@ function applyUndo(
       break;
     }
     case "editText": {
-      const { id, prevText } = entry;
+      const { id, prevText, prevLatex } = entry;
       setTextItems((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, text: prevText } : t)),
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                text: prevText,
+                latex: prevLatex,
+              }
+            : t,
+        ),
       );
       break;
     }
@@ -179,9 +194,17 @@ function applyRedo(
       break;
     }
     case "editText": {
-      const { id, nextText } = entry;
+      const { id, nextText, nextLatex } = entry;
       setTextItems((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, text: nextText } : t)),
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                text: nextText,
+                latex: nextLatex,
+              }
+            : t,
+        ),
       );
       break;
     }
@@ -344,11 +367,25 @@ export function useWhiteboardHistory(
   );
 
   const editText = useCallback(
-    (id: string, prevText: string, nextText: string) => {
+    (
+      id: string,
+      prevText: string,
+      nextText: string,
+      prevLatex?: string,
+      nextLatex?: string,
+    ) => {
       setTextItems((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, text: nextText } : t)),
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                text: nextText,
+                latex: nextLatex,
+              }
+            : t,
+        ),
       );
-      _push({ kind: "editText", id, prevText, nextText });
+      _push({ kind: "editText", id, prevText, nextText, prevLatex, nextLatex });
     },
     [setTextItems, _push],
   );

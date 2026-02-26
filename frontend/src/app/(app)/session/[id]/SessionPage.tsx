@@ -41,6 +41,7 @@ import { useImageLayer } from "./hooks/useImageLayer";
 import { useSelection } from "./hooks/useSelection";
 import { useFeedback } from "./hooks/useFeedback";
 import { useChat } from "./hooks/useChat";
+import { MathLiveField, MathLiveStatic } from "@/components/math/mathlive";
 
 export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const { currentUser } = useUser();
@@ -80,6 +81,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const titleBeforeEditRef = useRef(DEFAULT_WHITEBOARD_TITLE);
   const titleLoadedRef = useRef(false);
   const titleSavedRef = useRef(DEFAULT_WHITEBOARD_TITLE);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   /**
    * Callback passed to useSession — sets the canonical title from session data
@@ -117,6 +119,18 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     persistence,
   });
   const chat = useChat();
+
+  const handleChatInputResize = useCallback(() => {
+    const el = chatInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  useEffect(() => {
+    handleChatInputResize();
+  }, [chat.chatInput, handleChatInputResize]);
+
 
   const canvas = useCanvasDrawing({
     canvasRef,
@@ -514,9 +528,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (showClearConfirmDialog) return;
+      const inMathField = e.composedPath().some(
+        (node) => node instanceof HTMLElement && node.tagName === "MATH-FIELD",
+      );
       const inInput =
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
+        inMathField ||
         (e.target as HTMLElement)?.isContentEditable;
       if (e.key === "Escape") {
         images.setSelectedImageId(null);
@@ -1053,17 +1071,19 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   </div>
                   {isEditingProblem ? (
                     <div className="space-y-2">
-                      <textarea
+                      <MathLiveField
                         value={problemDraft}
-                        onChange={(e) => setProblemDraft(e.target.value)}
+                        onValueChange={(value) => setProblemDraft(value.latex)}
+                        placeholder="Type the problem..."
+                        className="text-sm"
+                        multiline
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
                             handleSaveProblem();
                           }
                         }}
-                        className="w-full text-sm text-foreground bg-white border border-slate-200 rounded-md p-2 resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
-                        rows={4}
+                        ariaLabel="Edit problem"
                       />
                       <div className="flex items-center gap-2">
                         <Button size="sm" onClick={handleSaveProblem} disabled={isSavingProblem}>
@@ -1076,7 +1096,9 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     </div>
                   ) : (
                     <p className="text-sm font-medium text-foreground whitespace-pre-line text-center">
-                      {problemDraft}
+                      {problemDraft ? (
+                        <MathLiveStatic latex={problemDraft} ariaLabel="Problem statement" />
+                      ) : null}
                     </p>
                   )}
                 </div>
@@ -1154,7 +1176,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                       } else {
                         e.preventDefault();
                         e.stopPropagation();
-                        text.setTextEditState({ x: t.x, y: t.y - 14, id: t.id, initialText: t.text });
+                        text.setTextEditState({
+                          x: t.x,
+                          y: t.y - 14,
+                          id: t.id,
+                          initialText: t.text,
+                          initialLatex: t.latex,
+                        });
                       }
                     }}
                   >
@@ -1167,7 +1195,15 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                         className="whitespace-pre-wrap leading-relaxed select-none pointer-events-auto"
                         style={{ font: `${t.fontSize}px system-ui, -apple-system, sans-serif`, color: t.color }}
                       >
-                        {t.text}
+                        {t.latex ? (
+                          <MathLiveStatic
+                            latex={t.latex}
+                            className="mathlive-static mathlive-static--whiteboard"
+                            ariaLabel="Math text item"
+                          />
+                        ) : (
+                          t.text
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1234,20 +1270,15 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
               {/* Text edit overlay */}
               {text.textEditState && (
-                <textarea
+                <MathLiveField
                   key={text.textEditState.id ?? "new"}
-                  ref={text.textAreaRef}
-                  defaultValue={text.textEditState.initialText ?? ""}
-                  className="absolute z-20 outline-none border-2 border-dashed border-transparent focus:border-blue-300 focus:ring-0 bg-white/90 rounded min-w-[120px] resize-none overflow-hidden py-1 px-2 text-base leading-relaxed shadow-sm"
-                  style={{
-                    left: view.pan.x + text.textEditState.x * view.scale,
-                    top: view.pan.y + text.textEditState.y * view.scale,
-                    font: "16px system-ui, -apple-system, sans-serif",
-                    color: penColor,
-                    minHeight: "1.5em",
-                  }}
-                  rows={1}
+                  ref={text.mathFieldRef}
+                  value={text.textEditValue.latex}
+                  onValueChange={(value) => text.setTextEditValue(value)}
                   placeholder="Type here..."
+                  className="absolute z-20 mathlive-field--overlay"
+                  autoFocus
+                  multiline
                   onBlur={text.commitTextOverlay}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
@@ -1259,10 +1290,12 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                       text.commitTextOverlay();
                     }
                   }}
-                  onInput={(e) => {
-                    const ta = e.currentTarget;
-                    ta.style.height = "auto";
-                    ta.style.height = `${Math.max(ta.scrollHeight, 24)}px`;
+                  ariaLabel="Math text input"
+                  style={{
+                    left: view.pan.x + text.textEditState.x * view.scale,
+                    top: view.pan.y + text.textEditState.y * view.scale,
+                    font: "16px system-ui, -apple-system, sans-serif",
+                    color: penColor,
                   }}
                 />
               )}
@@ -1348,7 +1381,11 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                                 {step.verdict}
                               </span>
                             </div>
-                            <p className="text-xs text-muted-foreground font-mono">{step.latex}</p>
+                            <MathLiveStatic
+                              latex={step.latex}
+                              className="text-xs text-muted-foreground"
+                              ariaLabel={`Step ${step.id} equation`}
+                            />
                             {feedback.expandedStep === i && (
                               <div className="mt-3 space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
                                 <p className="text-xs text-foreground">{step.explanation}</p>
@@ -1389,8 +1426,10 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
               <div className="border-t border-slate-200 p-3">
                 <div className="flex items-end gap-2">
                   <textarea
+                    ref={chatInputRef}
                     value={chat.chatInput}
                     onChange={(e) => chat.setChatInput(e.target.value)}
+                    onInput={handleChatInputResize}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
@@ -1399,7 +1438,9 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     }}
                     placeholder="Ask the tutor..."
                     rows={1}
-                    className="flex-1 resize-none bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition"
+                    className="flex-1 min-w-0 resize-none bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition whitespace-pre-wrap break-words overflow-x-hidden"
+                    style={{ maxHeight: "30vh", overflowY: "auto" }}
+                    aria-label="Ask the tutor"
                   />
                   <Button
                     size="icon"

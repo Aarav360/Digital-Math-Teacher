@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "mathlive/static.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -121,6 +122,107 @@
   }
 }
 
+@layer components {
+  .mathlive-field {
+    display: block;
+    width: 100%;
+    min-height: 2.5rem;
+    height: auto;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background: #ffffff;
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+    color: var(--foreground);
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .mathlive-field:focus-within {
+    outline: none;
+    border-color: color-mix(in oklab, var(--primary) 40%, var(--border));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 20%, transparent);
+  }
+
+  .mathlive-field--overlay {
+    background: rgba(255, 255, 255, 0.9);
+    border-style: dashed;
+    border-color: transparent;
+    border-width: 2px;
+    border-radius: 0.5rem;
+    min-width: 120px;
+    max-width: 320px;
+    width: fit-content;
+    display: inline-block;
+    min-height: 1.5em;
+    padding: 0.25rem 0.5rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+  }
+
+  .mathlive-field--overlay:focus-within {
+    border-color: rgba(147, 197, 253, 0.9);
+    box-shadow: 0 0 0 1px rgba(147, 197, 253, 0.9);
+  }
+
+  .mathlive-field--inline {
+    border: none;
+    padding: 0;
+    background: transparent;
+    min-height: 1.25rem;
+    border-radius: 0.25rem;
+  }
+
+
+  .mathlive-field--inline:focus-within {
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .mathlive-static {
+    display: inline;
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+    color: inherit;
+  }
+
+  .mathlive-static--whiteboard {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+
+
+  .mathlive-field .ML__text {
+    background: transparent !important;
+  }
+
+  .mathlive-field .ML__text .ML__selection,
+  .mathlive-field .ML__selection {
+    background: transparent;
+  }
+
+  .mathlive-field {
+    --ML__textmode-background: transparent;
+    --ML__selection-background: transparent;
+    --ML__selection-color: currentColor;
+  }
+
+  .mathlive-field .ML__text,
+  .mathlive-field .ML__text * {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  math-field::part(content) {
+    background: transparent !important;
+  }
+
+  math-field::part(content)::selection {
+    background: transparent !important;
+    color: inherit;
+  }
+}
+
 /* Hide Next.js error overlay portal */
 nextjs-portal {
   display: none !important;
@@ -201,4 +303,3 @@ nextjs-portal {
   display: inline-block;
   will-change: transform, opacity;
 }
-

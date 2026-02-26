@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MathLiveField, MathLiveStatic } from "@/components/math/mathlive";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
@@ -231,6 +231,16 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
     }
   };
 
+  const handleProblemTitleChange = (problemId: string, title: string) => {
+    if (!notebook) return;
+    setNotebook({
+      ...notebook,
+      problems: notebook.problems.map((p) =>
+        p.id === problemId ? { ...p, title } : p,
+      ),
+    });
+  };
+
   const handleDragStart = (id: string) => {
     setDraggingId(id);
   };
@@ -309,10 +319,11 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
           <div className="flex items-center justify-between gap-4">
             <div className="flex-1 space-y-2">
               <label className="text-xs font-medium text-muted-foreground">Notebook title</label>
-              <Input
+              <MathLiveField
                 value={notebook.title}
-                onChange={(e) => handleTitleChange(e.target.value)}
+                onValueChange={(value) => handleTitleChange(value.latex)}
                 onBlur={saveNotebookMeta}
+                ariaLabel="Notebook title"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -325,11 +336,12 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
           </div>
           <div className="space-y-2">
             <label className="text-xs font-medium text-muted-foreground">Overall teacher prompt</label>
-            <Textarea
+            <MathLiveField
               value={notebook.overall_prompt ?? ""}
-              onChange={(e) => handleOverallPromptChange(e.target.value)}
+              onValueChange={(value) => handleOverallPromptChange(value.latex)}
               onBlur={saveNotebookMeta}
-              rows={3}
+              multiline
+              ariaLabel="Overall teacher prompt"
             />
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
@@ -349,16 +361,18 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
                   <TabsTrigger value="batch">Batch</TabsTrigger>
                 </TabsList>
                 <TabsContent value="single" className="space-y-3 pt-4">
-                  <Input
+                  <MathLiveField
                     value={singleTitle}
-                    onChange={(e) => setSingleTitle(e.target.value)}
+                    onValueChange={(value) => setSingleTitle(value.latex)}
                     placeholder="Problem title (optional)"
+                    ariaLabel="Problem title"
                   />
-                  <Textarea
+                  <MathLiveField
                     value={singlePrompt}
-                    onChange={(e) => setSinglePrompt(e.target.value)}
+                    onValueChange={(value) => setSinglePrompt(value.latex)}
                     placeholder="Problem statement"
-                    rows={3}
+                    multiline
+                    ariaLabel="Problem statement"
                   />
                   <Button type="button" variant="secondary" onClick={handleAddSingle} disabled={isAdding}>
                     <Plus className="size-4" />
@@ -401,14 +415,20 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className={`h-2 w-2 rounded-full ${SESSION_STATUS_COLORS[normalized]}`} />
-                    <input
-                      className="text-sm font-medium text-foreground bg-transparent focus:outline-none w-full"
-                      defaultValue={problem.title}
-                      onBlur={(e) => handleUpdateProblemTitle(problem, e.target.value)}
+                    <MathLiveField
+                      value={problem.title}
+                      onValueChange={(value) => handleProblemTitleChange(problem.id, value.latex)}
+                      onBlur={() => handleUpdateProblemTitle(problem, problem.title)}
+                      className="mathlive-field--inline w-full text-sm font-medium"
+                      ariaLabel="Problem title"
                     />
                   </div>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                    {problem.prompt || "No prompt provided."}
+                    {problem.prompt ? (
+                      <MathLiveStatic latex={problem.prompt} ariaLabel="Problem prompt" />
+                    ) : (
+                      "No prompt provided."
+                    )}
                   </p>
                   <div className="mt-3 flex items-center gap-3 text-xs">
                     {problem.session_id ? (

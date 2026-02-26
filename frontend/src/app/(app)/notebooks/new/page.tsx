@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { MathLiveField } from "@/components/math/mathlive";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
@@ -118,14 +118,15 @@ export default function NewNotebookPage() {
           <Card className="p-6 space-y-5">
             <div className="space-y-2">
               <label className="text-xs font-medium text-muted-foreground">Notebook title</label>
-              <Input
+              <MathLiveField
                 value={title}
-                onChange={(e) => {
-                  setTitle(e.target.value);
-                  if (e.target.value.trim()) setTitleError(null);
+                onValueChange={(value) => {
+                  setTitle(value.latex);
+                  if (value.text.trim()) setTitleError(null);
                 }}
                 placeholder="Algebra Homework 2"
                 className={titleError ? "border-red-500 focus-visible:ring-red-500/40" : undefined}
+                ariaLabel="Notebook title"
               />
               {titleError && (
                 <p className="text-xs text-red-600">{titleError}</p>
@@ -134,11 +135,12 @@ export default function NewNotebookPage() {
 
             <div className="space-y-2">
               <label className="text-xs font-medium text-muted-foreground">Overall teacher prompt</label>
-              <Textarea
+              <MathLiveField
                 value={overallPrompt}
-                onChange={(e) => setOverallPrompt(e.target.value)}
+                onValueChange={(value) => setOverallPrompt(value.latex)}
                 placeholder="Remind students to show all steps and simplify final answers."
-                rows={4}
+                multiline
+                ariaLabel="Overall teacher prompt"
               />
             </div>
 
@@ -153,16 +155,18 @@ export default function NewNotebookPage() {
                   <TabsTrigger value="batch">Batch</TabsTrigger>
                 </TabsList>
                 <TabsContent value="single" className="space-y-3 pt-4">
-                  <Input
+                  <MathLiveField
                     value={singleTitle}
-                    onChange={(e) => setSingleTitle(e.target.value)}
+                    onValueChange={(value) => setSingleTitle(value.latex)}
                     placeholder="Problem title (optional)"
+                    ariaLabel="Problem title"
                   />
-                  <Textarea
+                  <MathLiveField
                     value={singlePrompt}
-                    onChange={(e) => setSinglePrompt(e.target.value)}
+                    onValueChange={(value) => setSinglePrompt(value.latex)}
                     placeholder="Problem statement"
-                    rows={3}
+                    multiline
+                    ariaLabel="Problem statement"
                   />
                   <Button type="button" variant="secondary" onClick={handleAddSingle}>
                     <Plus className="size-4" />

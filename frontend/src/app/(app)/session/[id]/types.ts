@@ -36,6 +36,7 @@ export type TextItem = {
   x: number;
   y: number;
   text: string;
+  latex?: string;
   color: string;
   fontSize: number;
 };
