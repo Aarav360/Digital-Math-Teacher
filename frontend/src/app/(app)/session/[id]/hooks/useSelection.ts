@@ -158,7 +158,7 @@ export function useSelection({ content, view, history }: SelectionArgs) {
     if (si.size === 0 && sh.size === 0) return;
     const removedStrokes = strokes.filter((_, i) => si.has(i));
     const removedShapes = shapes.filter((_, i) => sh.has(i));
-    history.deleteItems({ strokes: removedStrokes, shapes: removedShapes, textItems: [], imageItems: [] });
+    history.deleteItems({ strokes: removedStrokes, shapes: removedShapes, textItems: [], imageItems: [], graphItems: [] });
     setSelectedStrokeIndices(new Set());
     setSelectedShapeIndices(new Set());
   }, [state, history]);
@@ -218,7 +218,7 @@ export function useSelection({ content, view, history }: SelectionArgs) {
       }));
       const baseStroke = state.strokes.length;
       const baseShape = state.shapes.length;
-      history.pasteSelection({ strokes: newStrokes, shapes: newShapes });
+      history.pasteSelection({ strokes: newStrokes, shapes: newShapes, textItems: [], imageItems: [], graphItems: [] });
       setSelectedStrokeIndices(
         new Set(Array.from({ length: newStrokes.length }, (_, i) => baseStroke + i)),
       );

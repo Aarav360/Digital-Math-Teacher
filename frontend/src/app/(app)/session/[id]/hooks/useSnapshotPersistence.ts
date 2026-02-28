@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { saveSnapshot, loadSnapshot } from "@/lib/api";
 import { getToken, getApiBase } from "@/lib/auth";
 import { toast } from "sonner";
-import type { Stroke, ShapeItem, TextItem, ImageItem } from "../types";
+import type { Stroke, ShapeItem, TextItem, ImageItem, GraphItem } from "../types";
 import {
   AUTOSAVE_DEBOUNCE_MS,
   MIN_TIME_BETWEEN_SAVES_MS,
@@ -29,8 +29,8 @@ export function useSnapshotPersistence({
   requestRedraw,
   currentUserId,
 }: PersistenceArgs) {
-  const { refs, imageCacheRef, replaceAll, rebuildImageCache, state } = content;
-  const { strokesRef, shapesRef, textItemsRef, imageItemsRef } = refs;
+  const { refs, replaceAll, rebuildImageCache, rebuildGraphCache, state } = content;
+  const { strokesRef, shapesRef, textItemsRef, imageItemsRef, graphItemsRef } = refs;
   const { isLoadingSession, sessionError, pendingBlankMigrationRef } = session;
 
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
@@ -43,6 +43,7 @@ export function useSnapshotPersistence({
   const migrationAttemptedRef = useRef<boolean>(false);
   const canvasSizeRef = useRef({ width: 0, height: 0 });
   const imagesDirtyRef = useRef(false);
+  const graphsDirtyRef = useRef(false);
 
   // Tracks component mount state so autosave cleanup doesn't cancel saves on unmount
   const isMountedRef = useRef(true);
@@ -55,6 +56,10 @@ export function useSnapshotPersistence({
   useEffect(() => {
     imagesDirtyRef.current = true;
   }, [state.imageItems]);
+
+  useEffect(() => {
+    graphsDirtyRef.current = true;
+  }, [state.graphItems]);
 
   const getDraftKey = useCallback(
     (suffix: string) => {
@@ -114,12 +119,14 @@ export function useSnapshotPersistence({
             : [];
           const loadedText = (strokes_json.textItems as TextItem[]) ?? [];
           const loadedImages = (strokes_json.imageItems as ImageItem[]) ?? [];
+          const loadedGraphs = (strokes_json.graphItems as GraphItem[]) ?? [];
 
           replaceAll({
             strokes: loadedStrokes,
             shapes: loadedShapes,
             textItems: loadedText,
             imageItems: loadedImages,
+            graphItems: loadedGraphs,
           });
           resetWithSnapshot();
 
@@ -134,7 +141,9 @@ export function useSnapshotPersistence({
 
           // isLoadingSnapshot must remain true until cache rebuild completes (invariant)
           await rebuildImageCache(loadedImages, requestRedraw);
+          await rebuildGraphCache(loadedGraphs, requestRedraw);
           imagesDirtyRef.current = false;
+          graphsDirtyRef.current = false;
         } else if (!result.ok && result.status === 404) {
           // No snapshot yet — attempt localStorage migration
           if (!currentUserId) return;
@@ -158,6 +167,7 @@ export function useSnapshotPersistence({
                     shapes?: ShapeItem[];
                     textItems?: TextItem[];
                     imageItems?: ImageItem[];
+                    graphItems?: GraphItem[];
                   })
                 : null;
             } catch {
@@ -165,7 +175,7 @@ export function useSnapshotPersistence({
             }
           })();
 
-          if (data && (data.strokes || data.shapes || data.textItems || data.imageItems)) {
+          if (data && (data.strokes || data.shapes || data.textItems || data.imageItems || data.graphItems)) {
             const migrStrokes = data.strokes?.length
               ? (data.strokes as Array<Stroke & { id?: string }>).map((s, i) => ({
                   ...s,
@@ -179,28 +189,32 @@ export function useSnapshotPersistence({
                 }))
               : [];
             const migrImages = data.imageItems ?? [];
+            const migrGraphs = data.graphItems ?? [];
 
             replaceAll({
               strokes: migrStrokes,
               shapes: migrShapes,
               textItems: data.textItems ?? [],
               imageItems: migrImages,
+              graphItems: migrGraphs,
             });
             resetWithSnapshot();
             await rebuildImageCache(migrImages, requestRedraw);
+            await rebuildGraphCache(migrGraphs, requestRedraw);
 
             migrationAttemptedRef.current = true;
             const { width, height } = canvasSizeRef.current;
             saveSnapshot(sessionId, {
-              strokes_json: {
-                strokes: migrStrokes,
-                shapes: migrShapes,
-                textItems: data.textItems || [],
-                imageItems: migrImages,
-              },
-              width,
-              height,
-            })
+                strokes_json: {
+                  strokes: migrStrokes,
+                  shapes: migrShapes,
+                  textItems: data.textItems || [],
+                  imageItems: migrImages,
+                  graphItems: migrGraphs,
+                },
+                width,
+                height,
+              })
               .then((migrateResult) => {
                 if (migrateResult.ok) {
                   const key = getDraftKey(sessionId);
@@ -211,6 +225,7 @@ export function useSnapshotPersistence({
                     "1",
                   );
                   imagesDirtyRef.current = false;
+                  graphsDirtyRef.current = false;
                   toast.success("Draft migrated to cloud");
                 } else {
                   console.error("Failed to migrate draft:", migrateResult.error);
@@ -290,7 +305,7 @@ export function useSnapshotPersistence({
           strokes: strokesRef.current,
           shapes: shapesRef.current,
           textItems: textItemsRef.current,
-          // imageItems intentionally excluded from autosave
+          // imageItems/graphItems intentionally excluded from autosave
         },
         width,
         height,
@@ -386,6 +401,7 @@ export function useSnapshotPersistence({
           shapes: shapesRef.current,
           textItems: textItemsRef.current,
           imageItems: imageItemsRef.current, // include images on explicit action
+          graphItems: graphItemsRef.current,
         },
         width,
         height,
@@ -396,8 +412,9 @@ export function useSnapshotPersistence({
           lastSavedRef.current = serializedBeforeSave;
           lastSaveTimestampRef.current = Date.now();
           imagesDirtyRef.current = false;
+          graphsDirtyRef.current = false;
         } else {
-          toast.error("Failed to save before analysis");
+          toast.error("Failed to save on exit");
         }
       }
     } catch {
@@ -410,7 +427,7 @@ export function useSnapshotPersistence({
         saveControllerRef.current = null;
       }
     }
-  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef]);
+  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef, graphItemsRef]);
 
   // ── Back-navigation save (keepalive for small payloads) ──────────────────
 
@@ -434,7 +451,7 @@ export function useSnapshotPersistence({
     });
     const strokesDirty = serialized !== lastSavedRef.current;
 
-    if (!strokesDirty && !imagesDirtyRef.current) return;
+    if (!strokesDirty && !imagesDirtyRef.current && !graphsDirtyRef.current) return;
 
     const { width, height } = canvasSizeRef.current;
     const payload = {
@@ -443,6 +460,7 @@ export function useSnapshotPersistence({
         shapes: shapesRef.current,
         textItems: textItemsRef.current,
         imageItems: imageItemsRef.current,
+        graphItems: graphItemsRef.current,
       },
       width,
       height,
@@ -466,6 +484,7 @@ export function useSnapshotPersistence({
         body: JSON.stringify(payload),
       }).catch(() => {});
       imagesDirtyRef.current = false;
+      graphsDirtyRef.current = false;
       // Fire-and-forget — browser completes this after navigation
     } else {
       const { width, height } = canvasSizeRef.current;
@@ -485,9 +504,11 @@ export function useSnapshotPersistence({
         const result = await saveSnapshot(sessionId, payload);
         if (result.ok) {
           imagesDirtyRef.current = false;
+          graphsDirtyRef.current = false;
         } else {
           toast.error("Failed to save before analysis");
           imagesDirtyRef.current = true;
+          graphsDirtyRef.current = true;
         }
       } catch (err) {
         console.error("Exit snapshot failed (payload > 45KB):", err);
@@ -518,7 +539,7 @@ export function useSnapshotPersistence({
         }
       }
     }
-  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef, tryWriteLocalBackup]);
+  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef, graphItemsRef, tryWriteLocalBackup]);
 
   return {
     isLoadingSnapshot,

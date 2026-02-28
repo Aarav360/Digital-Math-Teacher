@@ -114,7 +114,7 @@ export function useTextLayer({ content, view, history, redraw, penColor }: TextL
       } else {
         const item = content.state.textItems.find((t) => t.id === textEditState.id);
         if (item) {
-          history.deleteItems({ strokes: [], shapes: [], textItems: [item], imageItems: [] });
+          history.deleteItems({ strokes: [], shapes: [], textItems: [item], imageItems: [], graphItems: [] });
         }
       }
     } else if (plainValue || latexValue) {

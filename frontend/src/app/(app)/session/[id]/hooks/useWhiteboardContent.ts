@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import type { Stroke, ShapeItem, TextItem, ImageItem } from "../types";
+import type { Stroke, ShapeItem, TextItem, ImageItem, GraphItem } from "../types";
 
 /**
  * Canonical whiteboard state owner.
@@ -23,21 +23,26 @@ export function useWhiteboardContent() {
   const [shapes, setShapes] = useState<ShapeItem[]>([]);
   const [textItems, setTextItems] = useState<TextItem[]>([]);
   const [imageItems, setImageItems] = useState<ImageItem[]>([]);
+  const [graphItems, setGraphItems] = useState<GraphItem[]>([]);
 
   // Mirror refs kept in sync for autosave (avoids stale closures)
   const strokesRef = useRef<Stroke[]>([]);
   const shapesRef = useRef<ShapeItem[]>([]);
   const textItemsRef = useRef<TextItem[]>([]);
   const imageItemsRef = useRef<ImageItem[]>([]);
+  const graphItemsRef = useRef<GraphItem[]>([]);
 
   useEffect(() => { strokesRef.current = strokes; }, [strokes]);
   useEffect(() => { shapesRef.current = shapes; }, [shapes]);
   useEffect(() => { textItemsRef.current = textItems; }, [textItems]);
   useEffect(() => { imageItemsRef.current = imageItems; }, [imageItems]);
+  useEffect(() => { graphItemsRef.current = graphItems; }, [graphItems]);
 
   // Image cache: keyed by ImageItem.id; populated lazily in redrawCanvas
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const cacheGenerationRef = useRef(0);
+  const graphCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const imageCacheGenerationRef = useRef(0);
+  const graphCacheGenerationRef = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -53,11 +58,13 @@ export function useWhiteboardContent() {
       shapes: ShapeItem[];
       textItems: TextItem[];
       imageItems: ImageItem[];
+      graphItems: GraphItem[];
     }) => {
       setStrokes(data.strokes);
       setShapes(data.shapes);
       setTextItems(data.textItems);
       setImageItems(data.imageItems);
+      setGraphItems(data.graphItems);
     },
     [],
   );
@@ -73,8 +80,8 @@ export function useWhiteboardContent() {
       items: ImageItem[],
       requestRedraw: () => void,
     ): Promise<void> => {
-      cacheGenerationRef.current += 1;
-      const thisGen = cacheGenerationRef.current;
+      imageCacheGenerationRef.current += 1;
+      const thisGen = imageCacheGenerationRef.current;
       imageCacheRef.current.clear();
       requestRedraw();
       const loads = items.map(
@@ -82,7 +89,7 @@ export function useWhiteboardContent() {
           new Promise<void>((resolve) => {
             const img = new Image();
             img.onload = () => {
-              if (!mountedRef.current || cacheGenerationRef.current !== thisGen) {
+              if (!mountedRef.current || imageCacheGenerationRef.current !== thisGen) {
                 resolve();
                 return;
               }
@@ -94,7 +101,40 @@ export function useWhiteboardContent() {
           }),
       );
       await Promise.all(loads);
-      if (mountedRef.current && cacheGenerationRef.current === thisGen) {
+      if (mountedRef.current && imageCacheGenerationRef.current === thisGen) {
+        requestRedraw();
+      }
+    },
+    [],
+  );
+
+  const rebuildGraphCache = useCallback(
+    async (
+      items: GraphItem[],
+      requestRedraw: () => void,
+    ): Promise<void> => {
+      graphCacheGenerationRef.current += 1;
+      const thisGen = graphCacheGenerationRef.current;
+      graphCacheRef.current.clear();
+      requestRedraw();
+      const loads = items.map(
+        (item) =>
+          new Promise<void>((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+              if (!mountedRef.current || graphCacheGenerationRef.current !== thisGen) {
+                resolve();
+                return;
+              }
+              graphCacheRef.current.set(item.id, img);
+              resolve();
+            };
+            img.onerror = () => resolve();
+            img.src = item.thumbnailDataUrl;
+          }),
+      );
+      await Promise.all(loads);
+      if (mountedRef.current && graphCacheGenerationRef.current === thisGen) {
         requestRedraw();
       }
     },
@@ -108,19 +148,22 @@ export function useWhiteboardContent() {
       shapes: shapesRef.current,
       textItems: textItemsRef.current,
       imageItems: imageItemsRef.current,
+      graphItems: graphItemsRef.current,
     }),
     [],
   );
 
   return {
-    state: { strokes, shapes, textItems, imageItems },
-    refs: { strokesRef, shapesRef, textItemsRef, imageItemsRef },
+    state: { strokes, shapes, textItems, imageItems, graphItems },
+    refs: { strokesRef, shapesRef, textItemsRef, imageItemsRef, graphItemsRef },
     imageCacheRef,
+    graphCacheRef,
     replaceAll,
     rebuildImageCache,
+    rebuildGraphCache,
     getState,
     /** Only for useWhiteboardHistory — do NOT use elsewhere */
-    __unsafeSetters: { setStrokes, setShapes, setTextItems, setImageItems },
+    __unsafeSetters: { setStrokes, setShapes, setTextItems, setImageItems, setGraphItems },
   };
 }
 

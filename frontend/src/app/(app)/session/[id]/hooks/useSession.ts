@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type RefObject } from "react";
 import { getSession, getProblem } from "@/lib/api";
-import type { SessionProblem, SessionNotebookProblem, Stroke, ShapeItem, TextItem, ImageItem } from "../types";
+import type { SessionProblem, SessionNotebookProblem, Stroke, ShapeItem, TextItem, ImageItem, GraphItem } from "../types";
 import { DEFAULT_WHITEBOARD_TITLE, WHITEBOARD_STORAGE_KEY_PREFIX } from "../constants";
 
 export interface SessionState {
@@ -18,6 +18,7 @@ export interface SessionState {
       shapes?: ShapeItem[];
       textItems?: TextItem[];
       imageItems?: ImageItem[];
+      graphItems?: GraphItem[];
     };
     oldKey: string;
   } | null>;
@@ -50,6 +51,7 @@ export function useSession(
       shapes?: ShapeItem[];
       textItems?: TextItem[];
       imageItems?: ImageItem[];
+      graphItems?: GraphItem[];
     };
     oldKey: string;
   } | null>(null);
@@ -109,6 +111,7 @@ export function useSession(
                   shapes?: ShapeItem[];
                   textItems?: TextItem[];
                   imageItems?: ImageItem[];
+                  graphItems?: GraphItem[];
                 };
                 pendingBlankMigrationRef.current = { data, oldKey };
               }

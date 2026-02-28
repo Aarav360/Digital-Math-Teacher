@@ -8,7 +8,7 @@ import {
   PenTool, Eraser, Undo2, Redo2, Trash2, Hand, ZoomIn, ZoomOut,
   Type, ChevronLeft, ChevronRight, Send, Check, X, AlertTriangle,
   ArrowLeft, Loader2, MousePointer2, Lasso, BoxSelect, ChevronDown,
-  Highlighter, Minus, Square, Circle, ArrowRight, Grid3X3, ImagePlus, Download, Pencil,
+  Highlighter, Minus, Square, Circle, ArrowRight, Grid3X3, ImagePlus, Download, Pencil, LineChart,
 } from "lucide-react";
 import type { StepFeedback } from "@/lib/data";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,7 @@ import { useSnapshotPersistence } from "./hooks/useSnapshotPersistence";
 import { useCanvasDrawing } from "./hooks/useCanvasDrawing";
 import { useTextLayer } from "./hooks/useTextLayer";
 import { useImageLayer } from "./hooks/useImageLayer";
+import { useGraphLayer } from "./hooks/useGraphLayer";
 import { useSelection } from "./hooks/useSelection";
 import { useFeedback } from "./hooks/useFeedback";
 import { useChat } from "./hooks/useChat";
@@ -49,6 +50,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   // ── Tool state ──────────────────────────────────────────────────────────
   const [tool, setTool] = useState<Tool>("pen");
+  const previousToolRef = useRef<Tool>("pen");
   const [penColor, setPenColor] = useState(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(2);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -71,6 +73,14 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const [showClearConfirmDialog, setShowClearConfirmDialog] = useState(false);
   const [clearConfirmDontAskAgain, setClearConfirmDontAskAgain] = useState(false);
 
+  // Graph modal state
+  const [isGraphDialogOpen, setIsGraphDialogOpen] = useState(false);
+  const [editingGraphId, setEditingGraphId] = useState<string | null>(null);
+  const [isDesmosReady, setIsDesmosReady] = useState(false);
+  const desmosContainerRef = useRef<HTMLDivElement>(null);
+  const desmosCalculatorRef = useRef<ReturnType<NonNullable<Window["Desmos"]>["GraphingCalculator"]> | null>(null);
+  const desmosLoadedGraphIdRef = useRef<string | null>(null);
+
   // ── Title state (declared early so handleTitleReady is stable before useSession) ─
   const [whiteboardTitle, setWhiteboardTitle] = useState(DEFAULT_WHITEBOARD_TITLE);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -82,6 +92,19 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const titleLoadedRef = useRef(false);
   const titleSavedRef = useRef(DEFAULT_WHITEBOARD_TITLE);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const DESMOS_API_KEY = process.env.NEXT_PUBLIC_DESMOS_API_KEY ?? "";
+  const GRAPH_DEFAULT_WIDTH = 420;
+  const GRAPH_DEFAULT_HEIGHT = 300;
+  const GRAPH_PLACEHOLDER_DATA_URL =
+    "data:image/svg+xml;utf8," +
+    encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${GRAPH_DEFAULT_WIDTH}" height="${GRAPH_DEFAULT_HEIGHT}" viewBox="0 0 ${GRAPH_DEFAULT_WIDTH} ${GRAPH_DEFAULT_HEIGHT}">
+        <rect width="100%" height="100%" fill="#ffffff"/>
+        <rect x="0.5" y="0.5" width="${GRAPH_DEFAULT_WIDTH - 1}" height="${GRAPH_DEFAULT_HEIGHT - 1}" fill="none" stroke="#e2e8f0"/>
+        <path d="M0 ${GRAPH_DEFAULT_HEIGHT / 2} H ${GRAPH_DEFAULT_WIDTH}" stroke="#e2e8f0" stroke-width="1"/>
+        <path d="M${GRAPH_DEFAULT_WIDTH / 2} 0 V ${GRAPH_DEFAULT_HEIGHT}" stroke="#e2e8f0" stroke-width="1"/>
+      </svg>`,
+    );
 
   /**
    * Callback passed to useSession — sets the canonical title from session data
@@ -112,6 +135,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   const text = useTextLayer({ content, view, history, redraw, penColor });
   const images = useImageLayer({ content, view, history, redraw, canvasSizeRef: persistence.canvasSizeRef });
+  const graphs = useGraphLayer({ content, view, history, redraw });
   const selection = useSelection({ content, view, history });
   const feedback = useFeedback({
     isBlank: session.isBlank,
@@ -337,10 +361,86 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     };
   }, []);
 
+  // ── Desmos loader / modal ─────────────────────────────────────────────
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.Desmos) {
+      setIsDesmosReady(true);
+      return;
+    }
+    if (!DESMOS_API_KEY) return;
+    const existing = document.getElementById("desmos-api");
+    if (existing) {
+      existing.addEventListener("load", () => setIsDesmosReady(true), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "desmos-api";
+    script.src = `https://www.desmos.com/api/v1.9/calculator.js?apiKey=${DESMOS_API_KEY}`;
+    script.async = true;
+    script.onload = () => setIsDesmosReady(true);
+    document.body.appendChild(script);
+  }, [DESMOS_API_KEY]);
+
+  useEffect(() => {
+    if (!isGraphDialogOpen) {
+      if (desmosCalculatorRef.current) {
+        desmosCalculatorRef.current.destroy();
+        desmosCalculatorRef.current = null;
+      }
+      desmosLoadedGraphIdRef.current = null;
+      return;
+    }
+    if (!isDesmosReady || !desmosContainerRef.current || !window.Desmos) return;
+    if (!desmosCalculatorRef.current) {
+      desmosCalculatorRef.current = window.Desmos.GraphingCalculator(desmosContainerRef.current, {
+        expressions: true,
+        settingsMenu: false,
+        keypad: false,
+      });
+    }
+    const currentId = editingGraphId;
+    if (!currentId || desmosLoadedGraphIdRef.current === currentId) return;
+    const item = content.state.graphItems.find((g) => g.id === currentId);
+    if (item?.state) {
+      desmosCalculatorRef.current.setState(item.state);
+    } else if (typeof desmosCalculatorRef.current.setBlank === "function") {
+      desmosCalculatorRef.current.setBlank();
+    }
+    desmosLoadedGraphIdRef.current = currentId;
+  }, [isGraphDialogOpen, isDesmosReady, editingGraphId, content.state.graphItems]);
+
   // ── Canvas mouse handlers ─────────────────────────────────────────────
+
+  const openGraphEditor = useCallback((graphId: string) => {
+    setEditingGraphId(graphId);
+    setIsGraphDialogOpen(true);
+  }, []);
+
+  const closeGraphEditor = useCallback(() => {
+    setIsGraphDialogOpen(false);
+    setEditingGraphId(null);
+  }, []);
+
+  const saveGraphEditor = useCallback(() => {
+    const graphId = editingGraphId;
+    if (!graphId || !desmosCalculatorRef.current) return;
+    const item = content.state.graphItems.find((g) => g.id === graphId);
+    if (!item) return;
+    const nextState = desmosCalculatorRef.current.getState();
+    const nextThumbnail = desmosCalculatorRef.current.screenshot({
+      width: Math.round(item.width),
+      height: Math.round(item.height),
+      targetPixelRatio: 1,
+    });
+    history.updateGraphState(graphId, nextState, nextThumbnail, item.state ?? null, item.thumbnailDataUrl);
+    closeGraphEditor();
+  }, [editingGraphId, content.state.graphItems, history, closeGraphEditor]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     images.setSelectedImageId(null);
+    graphs.setSelectedGraphId(null);
     if (e.button === 2) {
       e.preventDefault();
       view.setIsPanning(true);
@@ -348,6 +448,24 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
       return;
     }
     const pos = view.getPos(e.clientX, e.clientY);
+    if (tool === "graphPlace") {
+      const id = history.nextId();
+      const x = pos.x - GRAPH_DEFAULT_WIDTH / 2;
+      const y = pos.y - GRAPH_DEFAULT_HEIGHT / 2;
+      history.addGraph({
+        id,
+        x,
+        y,
+        width: GRAPH_DEFAULT_WIDTH,
+        height: GRAPH_DEFAULT_HEIGHT,
+        state: null,
+        thumbnailDataUrl: GRAPH_PLACEHOLDER_DATA_URL,
+      });
+      graphs.setSelectedGraphId(id);
+      setTool(previousToolRef.current);
+      openGraphEditor(id);
+      return;
+    }
     if (tool === "hand") {
       view.setIsPanning(true);
       view.panStartRef.current = { x: e.clientX, y: e.clientY, panX: view.pan.x, panY: view.pan.y };
@@ -392,7 +510,22 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     setIsDrawing(true);
     currentStrokeRef.current = [pos];
     resetIdleTimer();
-  }, [tool, penColor, penWidth, view, text, selection, images, resetIdleTimer]);
+  }, [
+    tool,
+    penColor,
+    penWidth,
+    view,
+    text,
+    selection,
+    images,
+    graphs,
+    history,
+    resetIdleTimer,
+    GRAPH_DEFAULT_WIDTH,
+    GRAPH_DEFAULT_HEIGHT,
+    GRAPH_PLACEHOLDER_DATA_URL,
+    openGraphEditor,
+  ]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     view.lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY };
@@ -472,7 +605,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
         const eraserRadius = penWidth * 5;
         const toRemove = getStrokesUnderEraser(currentStrokeRef.current, eraserRadius, content.state.strokes);
         const removedStrokes = content.state.strokes.filter((_, i) => toRemove.has(i));
-        history.deleteItems({ strokes: removedStrokes, shapes: [], textItems: [], imageItems: [] });
+        history.deleteItems({ strokes: removedStrokes, shapes: [], textItems: [], imageItems: [], graphItems: [] });
       }
     } else if (currentStrokeRef.current.length > 1) {
       history.addStroke({
@@ -509,7 +642,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
       const eraserRadius = penWidth * 5;
       const toRemove = getStrokesUnderEraser(currentStrokeRef.current, eraserRadius, content.state.strokes);
       const removedStrokes = content.state.strokes.filter((_, i) => toRemove.has(i));
-      history.deleteItems({ strokes: removedStrokes, shapes: [], textItems: [], imageItems: [] });
+      history.deleteItems({ strokes: removedStrokes, shapes: [], textItems: [], imageItems: [], graphItems: [] });
     } else if (currentStrokeRef.current.length > 1) {
       history.addStroke({
         id: history.nextId(),
@@ -528,6 +661,11 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (showClearConfirmDialog) return;
+      if (isGraphDialogOpen && e.key === "Escape") {
+        e.preventDefault();
+        closeGraphEditor();
+        return;
+      }
       const inMathField = e.composedPath().some(
         (node) => node instanceof HTMLElement && node.tagName === "MATH-FIELD",
       );
@@ -538,18 +676,25 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
         (e.target as HTMLElement)?.isContentEditable;
       if (e.key === "Escape") {
         images.setSelectedImageId(null);
+        graphs.setSelectedGraphId(null);
         selection.setSelectedStrokeIndices(new Set());
         selection.setSelectedShapeIndices(new Set());
         selection.setLassoPoints([]);
         selection.selectionBoxStartRef.current = null;
         selection.selectionBoxEndRef.current = null;
         selection.isSelectingRef.current = false;
+        if (tool === "graphPlace") setTool(previousToolRef.current);
         if (isEditingTitle) cancelTitleEdit();
       } else if (!inInput && (e.key === "Backspace" || e.key === "Delete")) {
-        if (images.selectedImageId) {
+        if (graphs.selectedGraphId) {
+          e.preventDefault();
+          const removedGraph = content.state.graphItems.find((g) => g.id === graphs.selectedGraphId);
+          history.deleteItems({ strokes: [], shapes: [], textItems: [], imageItems: [], graphItems: removedGraph ? [removedGraph] : [] });
+          graphs.setSelectedGraphId(null);
+        } else if (images.selectedImageId) {
           e.preventDefault();
           const removedImage = content.state.imageItems.find((i) => i.id === images.selectedImageId);
-          history.deleteItems({ strokes: [], shapes: [], textItems: [], imageItems: removedImage ? [removedImage] : [] });
+          history.deleteItems({ strokes: [], shapes: [], textItems: [], imageItems: removedImage ? [removedImage] : [], graphItems: [] });
           images.setSelectedImageId(null);
         } else {
           const { strokes: si, shapes: sh } = selection.selectionRef.current;
@@ -578,8 +723,9 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
-    history, selection, images, feedback, persistence.canvasSizeRef,
-    isEditingTitle, cancelTitleEdit, showClearConfirmDialog, content.state.imageItems,
+    history, selection, images, graphs, feedback, persistence.canvasSizeRef,
+    isEditingTitle, cancelTitleEdit, showClearConfirmDialog, content.state.imageItems, content.state.graphItems,
+    tool, closeGraphEditor, isGraphDialogOpen,
   ]);
 
   useEffect(() => {
@@ -638,6 +784,15 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     router.refresh();
   }, [sessionId, currentUser, whiteboardTitle, persistence, router]);
 
+  const handleGraphPlaceClick = useCallback(() => {
+    if (tool === "graphPlace") {
+      setTool(previousToolRef.current);
+      return;
+    }
+    previousToolRef.current = tool;
+    setTool("graphPlace");
+  }, [tool]);
+
   // ── Early returns ────────────────────────────────────────────────────────
 
   if (session.isLoadingSession) {
@@ -676,7 +831,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
         ? "grab"
         : text.hoveredInDragZone
           ? "move"
-          : tool === "lasso" || tool === "selectionBox"
+          : tool === "lasso" || tool === "selectionBox" || tool === "graphPlace"
             ? "crosshair"
             : tool === "text"
               ? "text"
@@ -705,7 +860,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     }
   };
 
-  const { textItems, imageItems } = content.state;
+  const { textItems, imageItems, graphItems } = content.state;
   const currentProblemText =
     session.notebookProblem?.prompt ??
     session.problemOverride ??
@@ -964,6 +1119,15 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                 <ImagePlus className="size-4" />
               </Button>
               <Button
+                variant={tool === "graphPlace" ? "default" : "outline"}
+                size="icon"
+                className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)}
+                title="Place graph"
+                onClick={handleGraphPlaceClick}
+              >
+                <LineChart className="size-4" />
+              </Button>
+              <Button
                 variant="outline"
                 size="icon"
                 className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)}
@@ -1024,6 +1188,53 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   <div className="flex justify-end gap-2">
                     <Button variant="outline" size="sm" onClick={handleClearConfirmNo}>No</Button>
                     <Button variant="destructive" size="sm" onClick={handleClearConfirmYes} className="bg-red-600 hover:bg-red-700">Yes</Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Graph editor dialog */}
+            {isGraphDialogOpen && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="graph-dialog-title"
+                onClick={(e) => e.target === e.currentTarget && closeGraphEditor()}
+              >
+                <div
+                  className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-4xl h-[80vh] mx-4 flex flex-col"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") { e.preventDefault(); closeGraphEditor(); }
+                  }}
+                >
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+                    <h2 id="graph-dialog-title" className="text-base font-semibold text-foreground">Graph Editor</h2>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={closeGraphEditor}>Cancel</Button>
+                      <Button
+                        size="sm"
+                        onClick={saveGraphEditor}
+                        disabled={!DESMOS_API_KEY || !isDesmosReady}
+                      >
+                        Save graph
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    {!DESMOS_API_KEY ? (
+                      <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                        Missing `NEXT_PUBLIC_DESMOS_API_KEY`. Add it and reload to use the graph editor.
+                      </div>
+                    ) : !isDesmosReady ? (
+                      <div className="h-full flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin" />
+                        Loading Desmos...
+                      </div>
+                    ) : (
+                      <div ref={desmosContainerRef} className="w-full h-full" />
+                    )}
                   </div>
                 </div>
               </div>
@@ -1230,7 +1441,10 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     }}
                     role="img"
                     aria-label={isSelected ? "Image selected; press Delete to remove" : "Click to select image"}
-                    onMouseDown={(e) => images.startImageDrag(img, e)}
+                    onMouseDown={(e) => {
+                      graphs.setSelectedGraphId(null);
+                      images.startImageDrag(img, e);
+                    }}
                   >
                     <img
                       src={img.dataUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}
@@ -1248,7 +1462,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                           e.preventDefault();
                           e.stopPropagation();
                           const removedImage = imageItems.find((i) => i.id === img.id);
-                          history.deleteItems({ strokes: [], shapes: [], textItems: [], imageItems: removedImage ? [removedImage] : [] });
+                          history.deleteItems({ strokes: [], shapes: [], textItems: [], imageItems: removedImage ? [removedImage] : [], graphItems: [] });
                           images.setSelectedImageId(null);
                         }}
                       >
@@ -1262,6 +1476,72 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                         title="Resize (hold Shift for free-form)"
                         aria-label="Resize image; hold Shift for free-form"
                         onMouseDown={(e) => images.startImageResize(img, e)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Graph items as draggable/resizable DOM overlays */}
+              {graphItems.map((graph) => {
+                const isSelected = graphs.selectedGraphId === graph.id;
+                const showOutline = isSelected || graphs.resizingGraphId === graph.id;
+                return (
+                  <div
+                    key={graph.id}
+                    className={cn(
+                      "absolute z-20 transition-[box-shadow]",
+                      showOutline && "ring-2 ring-dashed ring-blue-400 ring-offset-1",
+                      graphs.resizingGraphId === graph.id ? "cursor-nwse-resize" : "cursor-grab active:cursor-grabbing",
+                    )}
+                    style={{
+                      left: view.pan.x + graph.x * view.scale,
+                      top: view.pan.y + graph.y * view.scale,
+                      width: graph.width * view.scale,
+                      height: graph.height * view.scale,
+                    }}
+                    role="img"
+                    aria-label={isSelected ? "Graph selected; press Delete to remove" : "Click to select graph"}
+                    onMouseDown={(e) => {
+                      images.setSelectedImageId(null);
+                      graphs.startGraphDrag(graph, e);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openGraphEditor(graph.id);
+                    }}
+                  >
+                    <img
+                      src={graph.thumbnailDataUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}
+                      alt=""
+                      className="w-full h-full object-contain pointer-events-none select-none bg-white border border-slate-300"
+                      draggable={false}
+                    />
+                    {isSelected && (
+                      <button
+                        type="button"
+                        className="absolute -top-1 -left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-red-500 text-white shadow-md hover:bg-red-600 active:bg-red-700 transition-colors"
+                        title="Delete graph"
+                        aria-label="Delete graph"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const removedGraph = graphItems.find((g) => g.id === graph.id);
+                          history.deleteItems({ strokes: [], shapes: [], textItems: [], imageItems: [], graphItems: removedGraph ? [removedGraph] : [] });
+                          graphs.setSelectedGraphId(null);
+                        }}
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    )}
+                    {isSelected && (
+                      <div
+                        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize border-l-2 border-t-2 border-slate-400/80 bg-white/50 rounded-tl"
+                        style={{ touchAction: "none" }}
+                        title="Resize"
+                        aria-label="Resize graph"
+                        onMouseDown={(e) => graphs.startGraphResize(graph, e)}
                       />
                     )}
                   </div>

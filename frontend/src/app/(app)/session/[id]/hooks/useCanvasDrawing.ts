@@ -106,11 +106,12 @@ export function useCanvasDrawing({
   previewShape,
   showGrid,
 }: CanvasDrawingArgs) {
-  const { state, imageCacheRef } = content;
-  const { strokes, shapes, imageItems } = state;
+  const { state, imageCacheRef, graphCacheRef } = content;
+  const { strokes, shapes, imageItems, graphItems } = state;
   const { scale, pan, constantGridSize } = view;
   const { registerRedrawHandler, requestRedraw } = redraw;
   const failedImagesRef = useRef<Set<string>>(new Set());
+  const failedGraphsRef = useRef<Set<string>>(new Set());
 
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -167,6 +168,25 @@ export function useCanvasDrawing({
         };
         img.src = item.dataUrl;
         imageCacheRef.current.set(item.id, img);
+      }
+      if (img.complete && img.naturalWidth) {
+        ctx.drawImage(img, item.x, item.y, item.width, item.height);
+      }
+    }
+
+    // Graphs (thumbnails) — use cache so they draw once loaded; skip permanently failed
+    for (const item of graphItems) {
+      if (failedGraphsRef.current.has(item.id)) continue;
+      let img = graphCacheRef.current.get(item.id);
+      if (!img) {
+        img = new Image();
+        img.onload = () => requestRedraw();
+        img.onerror = () => {
+          failedGraphsRef.current.add(item.id);
+          requestRedraw();
+        };
+        img.src = item.thumbnailDataUrl;
+        graphCacheRef.current.set(item.id, img);
       }
       if (img.complete && img.naturalWidth) {
         ctx.drawImage(img, item.x, item.y, item.width, item.height);
@@ -277,7 +297,9 @@ export function useCanvasDrawing({
     strokes,
     shapes,
     imageItems,
+    graphItems,
     imageCacheRef,
+    graphCacheRef,
     previewShape,
     showGrid,
     constantGridSize,
@@ -342,7 +364,7 @@ export function useCanvasDrawing({
     if (!canvas) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const { width: W, height: H } = canvasSizeRef.current;
-    const { strokes: allStrokes, shapes: allShapes, textItems, imageItems: allImages } = content.state;
+    const { strokes: allStrokes, shapes: allShapes, textItems, imageItems: allImages, graphItems: allGraphs } = content.state;
     const off = document.createElement("canvas");
     off.width = W * dpr;
     off.height = H * dpr;
@@ -365,6 +387,19 @@ export function useCanvasDrawing({
           ctx.drawImage(img, item.x, item.y, item.width, item.height);
         } catch {
           // Skip failed image in export
+        }
+      }
+    }
+    for (const item of allGraphs) {
+      let img = graphCacheRef.current.get(item.id);
+      if (img?.complete && img.naturalWidth) {
+        ctx.drawImage(img, item.x, item.y, item.width, item.height);
+      } else {
+        try {
+          img = await loadImage(item.thumbnailDataUrl);
+          ctx.drawImage(img, item.x, item.y, item.width, item.height);
+        } catch {
+          // Skip failed graph thumbnail in export
         }
       }
     }
@@ -411,7 +446,7 @@ export function useCanvasDrawing({
     link.download = "whiteboard.png";
     link.href = off.toDataURL("image/png");
     link.click();
-  }, [canvasRef, canvasSizeRef, content.state, imageCacheRef, pan, scale]);
+  }, [canvasRef, canvasSizeRef, content.state, imageCacheRef, graphCacheRef, pan, scale]);
 
   return { redrawCanvas, handleExport };
 }

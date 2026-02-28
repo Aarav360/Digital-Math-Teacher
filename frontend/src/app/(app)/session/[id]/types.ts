@@ -5,6 +5,7 @@ export type Tool =
   | "highlighter"
   | "hand"
   | "text"
+  | "graphPlace"
   | "lasso"
   | "selectionBox"
   | "line"
@@ -50,6 +51,16 @@ export type ImageItem = {
   dataUrl: string;
 };
 
+export type GraphItem = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  state: unknown | null;
+  thumbnailDataUrl: string;
+};
+
 export type SessionProblem = {
   id: string;
   title: string;
@@ -72,11 +83,13 @@ export type HistoryEntry =
   | { kind: "shape"; item: ShapeItem }
   | { kind: "text"; item: TextItem }
   | { kind: "image"; item: ImageItem }
-  | { kind: "paste"; strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; imageItems: ImageItem[] }
+  | { kind: "graph"; item: GraphItem }
+  | { kind: "paste"; strokes: Stroke[]; shapes: ShapeItem[]; textItems: TextItem[]; imageItems: ImageItem[]; graphItems: GraphItem[] }
   | {
       kind: "delete";
       strokes: Stroke[];
       shapes: ShapeItem[];
       textItems: TextItem[];
       imageItems: ImageItem[];
+      graphItems: GraphItem[];
     };
