@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TUTOR_PERSONAS } from "@/lib/data";
 import { Check } from "lucide-react";
+import { getSettings, updateSettings } from "@/lib/api";
 
 const ZOOM_SPEED_STORAGE_KEY = "whiteboard-zoom-speed";
 const CONSTANT_GRID_STORAGE_KEY = "whiteboard-constant-grid-size";
@@ -29,6 +30,8 @@ export default function SettingsPage() {
   const [zoomSpeed, setZoomSpeed] = useState(ZOOM_STEP_DEFAULT);
   const [constantGridSize, setConstantGridSize] = useState(true);
   const [saveHistory, setSaveHistory] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const saveTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -48,6 +51,74 @@ export default function SettingsPage() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await getSettings();
+      if (cancelled) return;
+      if (res.ok) {
+        const s = res.data;
+        if (s.persona) setPersona(s.persona);
+        if (typeof s.help_level === "number") setHelpLevel(s.help_level);
+        if (s.theme === "light" || s.theme === "dark" || s.theme === "system") setTheme(s.theme);
+        if (s.pen_thickness === "fine" || s.pen_thickness === "medium" || s.pen_thickness === "thick") {
+          setPenThickness(s.pen_thickness);
+        }
+        if (typeof s.smooth_strokes === "boolean") setSmoothStrokes(s.smooth_strokes);
+        if (typeof s.show_grid === "boolean") setShowGrid(s.show_grid);
+        if (typeof s.zoom_speed === "number") setZoomSpeed(s.zoom_speed);
+        if (typeof s.constant_grid_size === "boolean") setConstantGridSize(s.constant_grid_size);
+        if (typeof s.save_history === "boolean") setSaveHistory(s.save_history);
+        if (typeof s.name === "string") setName(s.name);
+        if (typeof s.grade_level === "string") setGrade(s.grade_level);
+      }
+      setLoaded(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ZOOM_SPEED_STORAGE_KEY, String(zoomSpeed));
+      window.localStorage.setItem(CONSTANT_GRID_STORAGE_KEY, constantGridSize ? "1" : "0");
+    }
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(async () => {
+      await updateSettings({
+        name,
+        grade_level: grade,
+        persona,
+        help_level: helpLevel,
+        theme,
+        pen_thickness: penThickness,
+        smooth_strokes: smoothStrokes,
+        show_grid: showGrid,
+        zoom_speed: zoomSpeed,
+        constant_grid_size: constantGridSize,
+        save_history: saveHistory,
+      });
+    }, 500);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [
+    loaded,
+    name,
+    grade,
+    persona,
+    helpLevel,
+    theme,
+    penThickness,
+    smoothStrokes,
+    showGrid,
+    zoomSpeed,
+    constantGridSize,
+    saveHistory,
+  ]);
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-10">

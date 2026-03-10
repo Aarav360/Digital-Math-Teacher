@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CurrentUserId, DbSession
 from app.models.session import Session
 from app.models.chat_message import ChatMessage
+from app.models.user_usage_counter import UserUsageCounter
 from app.schemas.chat import ChatSendRequest, ChatHistoryResponse, ChatMessageRead
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -60,6 +61,13 @@ async def send_chat_message(body: ChatSendRequest, user_id: CurrentUserId, db: D
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    usage_result = await db.execute(select(UserUsageCounter).where(UserUsageCounter.user_id == user_id))
+    usage = usage_result.scalar_one_or_none()
+    if usage is None:
+        usage = UserUsageCounter(user_id=user_id, chat_messages=1)
+        db.add(usage)
+    else:
+        usage.chat_messages += 1
     return StreamingResponse(
         _stream_stub(body.session_id, body.message, db),
         media_type="text/event-stream",

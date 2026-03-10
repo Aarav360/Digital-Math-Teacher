@@ -8,6 +8,7 @@ from app.models.session import Session
 from app.models.canvas_snapshot import CanvasSnapshot
 from app.models.step import Step, StepEvaluation
 from app.models.session import SessionStatus
+from app.models.user_usage_counter import UserUsageCounter
 from app.schemas.step import AnalysisRequest, AnalysisResponse, StepRead, StepEvaluationRead
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -25,6 +26,13 @@ async def analyze_steps(body: AnalysisRequest, user_id: CurrentUserId, db: DbSes
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    usage_result = await db.execute(select(UserUsageCounter).where(UserUsageCounter.user_id == user_id))
+    usage = usage_result.scalar_one_or_none()
+    if usage is None:
+        usage = UserUsageCounter(user_id=user_id, analysis_runs=1)
+        db.add(usage)
+    else:
+        usage.analysis_runs += 1
     # Mark in progress while analysis runs (simpler status set)
     session.status = SessionStatus.IN_PROGRESS
     await db.flush()

@@ -57,6 +57,52 @@ export async function createGuestToken(): Promise<
   return handleResponse(res);
 }
 
+/** POST /api/v1/auth/google/start — returns Google auth URL. */
+export async function startGoogleAuth(): Promise<ApiResponse<{ auth_url: string }>> {
+  return apiFetch("/api/v1/auth/google/start", {
+    method: "POST",
+  });
+}
+
+/** POST /api/v1/auth/google/finish — exchange login code for JWT. */
+export async function finishGoogleAuth(
+  code: string
+): Promise<ApiResponse<{ access_token: string; token_type: string; user_id: string }>> {
+  return apiFetch("/api/v1/auth/google/finish", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export type UserSettings = {
+  user_id: string;
+  name: string | null;
+  email: string | null;
+  persona: string | null;
+  help_level: number | null;
+  theme: string | null;
+  pen_thickness: string | null;
+  smooth_strokes: boolean | null;
+  show_grid: boolean | null;
+  zoom_speed: number | null;
+  constant_grid_size: boolean | null;
+  save_history: boolean | null;
+  grade_level: string | null;
+};
+
+export async function getSettings(): Promise<ApiResponse<UserSettings>> {
+  return apiFetch("/api/v1/auth/settings");
+}
+
+export async function updateSettings(
+  payload: Partial<Omit<UserSettings, "user_id" | "email">>
+): Promise<ApiResponse<UserSettings>> {
+  return apiFetch("/api/v1/auth/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 /** GET /api/v1/auth/me — validates token, returns user or 401. */
 export async function getMe(): Promise<
   ApiResponse<{ id: string; email: string | null; name: string | null; is_guest: boolean }>
