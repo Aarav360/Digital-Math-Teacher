@@ -7,7 +7,7 @@ export const getCssVar = (name: string, fallback = "") => {
 export const resolveCssColor = (value: string, fallback = "") => {
   if (!value) return fallback;
   if (!value.startsWith("var(")) return value;
-  const match = value.match(/var\\((--[^)]+)\\)/);
+  const match = value.match(/var\((--[^)]+)\)/);
   if (!match) return fallback;
   return getCssVar(match[1], fallback);
 };

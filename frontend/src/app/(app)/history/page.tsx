@@ -8,6 +8,8 @@ import { Clock, BookOpen, Loader2, AlertCircle, Plus, Variable, TrendingUp, Tria
 import { AuroraBackground } from "@/components/aurora-background";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TEMPLATES } from "@/lib/data";
+import { MathLiveStatic } from "@/components/math/mathlive";
+import { normalizeLatexForDisplay } from "@/lib/latex";
 
 const ICON_MAP: Record<string, React.ElementType> = {
   plus: Plus,
@@ -36,7 +38,14 @@ function HistoryTypeIcon({ session }: { session: SessionListEntry }) {
           </div>
         </TooltipTrigger>
         <TooltipContent sideOffset={6}>
-          Notebook: {session.notebook_title}
+          <span className="flex items-center gap-1">
+            Notebook:
+            <MathLiveStatic
+              latex={normalizeLatexForDisplay(session.notebook_title)}
+              className="text-xs"
+              ariaLabel="Notebook title"
+            />
+          </span>
         </TooltipContent>
       </Tooltip>
     );

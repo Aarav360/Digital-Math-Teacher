@@ -29,7 +29,11 @@ const applyTheme = (nextTheme: Theme) => {
 const setThemeInternal = (nextTheme: Theme, persist: boolean) => {
   currentTheme = nextTheme;
   if (persist && typeof window !== "undefined") {
-    window.localStorage.setItem(THEME_KEY, nextTheme);
+    try {
+      window.localStorage.setItem(THEME_KEY, nextTheme);
+    } catch (err) {
+      console.warn("Failed to persist theme preference.", err);
+    }
   }
   applyTheme(nextTheme);
   notify();
@@ -38,10 +42,14 @@ const setThemeInternal = (nextTheme: Theme, persist: boolean) => {
 const initTheme = () => {
   if (initialized || typeof window === "undefined") return;
   initialized = true;
-  const stored = window.localStorage.getItem(THEME_KEY);
-  if (stored === "light" || stored === "dark" || stored === "system") {
-    currentTheme = stored;
-  } else {
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    if (stored === "light" || stored === "dark" || stored === "system") {
+      currentTheme = stored;
+    } else {
+      currentTheme = "light";
+    }
+  } catch {
     currentTheme = "light";
   }
 

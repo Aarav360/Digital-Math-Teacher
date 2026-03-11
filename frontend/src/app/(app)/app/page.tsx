@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus,
@@ -19,11 +19,35 @@ import {
   ChevronDown,
   Loader2,
   BookOpen,
+  PencilLine,
+  Download,
+  Trash2,
 } from "lucide-react";
 import { TEMPLATES, type Template } from "@/lib/data";
 import { normalizeSessionStatus, SESSION_STATUS_COLORS, SESSION_STATUS_LABELS } from "@/lib/session-status";
-import { listSessions, createBlankSession, listNotebooks, type SessionListEntry, type NotebookListEntry } from "@/lib/api";
+import {
+  listSessions,
+  createBlankSession,
+  listNotebooks,
+  updateSessionTitle,
+  deleteSession,
+  loadSnapshot,
+  type SessionListEntry,
+  type NotebookListEntry,
+} from "@/lib/api";
 import { AuroraBackground } from "@/components/aurora-background";
+import { MathLiveStatic } from "@/components/math/mathlive";
+import { normalizeLatexForDisplay } from "@/lib/latex";
+import { downloadSnapshotAsPng } from "@/lib/whiteboard-export";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 /* ------------------------------------------------------------------ */
@@ -190,7 +214,17 @@ function NotebookTemplateCard() {
 /*  Whiteboard Thumbnail Card                                          */
 /* ------------------------------------------------------------------ */
 
-function WhiteboardCard({ session }: { session: SessionListEntry }) {
+function WhiteboardCard({
+  session,
+  onRename,
+  onDownload,
+  onDelete,
+}: {
+  session: SessionListEntry;
+  onRename: (session: SessionListEntry) => void;
+  onDownload: (session: SessionListEntry) => void;
+  onDelete: (session: SessionListEntry) => void;
+}) {
   const { path, color: thumbColor } = getThumbnailStyle(session.id);
   const { color, soft } = getTopicPalette(session.topic);
   const displayTitle = session.title ?? session.problem_title ?? "Untitled Whiteboard";
@@ -279,16 +313,36 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
             </span>
           </div>
         </div>
-        <button
-          type="button"
-          className="p-1 rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent transition-all shrink-0"
-          aria-label="More options"
-          onClick={(e) => {
-            e.stopPropagation();
-          }}
-        >
-          <MoreVertical className="size-4" />
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="p-1 rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent transition-all shrink-0 data-[state=open]:opacity-100"
+              aria-label="More options"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreVertical className="size-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="w-44 rounded-xl border-[var(--neutral-200)] bg-[var(--surface-glass-90)] backdrop-blur-md shadow-lg p-1"
+          >
+            <DropdownMenuItem onClick={() => onRename(session)}>
+              <PencilLine className="size-4" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onDownload(session)}>
+              <Download className="size-4" />
+              Download
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[var(--neutral-200)]" />
+            <DropdownMenuItem variant="destructive" onClick={() => onDelete(session)}>
+              <Trash2 className="size-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );
@@ -299,6 +353,7 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
 /* ------------------------------------------------------------------ */
 
 function NotebookCard({ notebook }: { notebook: NotebookListEntry }) {
+  const displayTitle = normalizeLatexForDisplay(notebook.title);
   return (
     <div className="group flex flex-col">
       <Link href={`/notebooks/${notebook.id}`} className="block">
@@ -314,7 +369,12 @@ function NotebookCard({ notebook }: { notebook: NotebookListEntry }) {
                 <BookOpen className="size-4 text-primary" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground truncate">{notebook.title}</p>
+                <MathLiveStatic
+                  latex={displayTitle}
+                  className="text-sm font-medium text-foreground truncate block"
+                  ariaLabel="Notebook title"
+                  block
+                />
                 <p className="text-[11px] text-muted-foreground">
                   {notebook.problem_count} problem{notebook.problem_count === 1 ? "" : "s"}
                 </p>
@@ -363,6 +423,22 @@ export default function DashboardPage() {
   const [notebooks, setNotebooks] = useState<NotebookListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<SessionListEntry | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<SessionListEntry | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const getSessionTitle = useCallback(
+    (session: SessionListEntry) => session.title ?? session.problem_title ?? "Untitled Whiteboard",
+    [],
+  );
+
+  const renamePlaceholder = useMemo(
+    () => (renameTarget ? getSessionTitle(renameTarget) : ""),
+    [renameTarget, getSessionTitle],
+  );
 
   const fetchDashboard = useCallback(() => {
     setLoading(true);
@@ -392,6 +468,16 @@ export default function DashboardPage() {
     fetchDashboard();
   }, [fetchDashboard]);
 
+  useEffect(() => {
+    if (!renameTarget) return;
+    setRenameValue(getSessionTitle(renameTarget));
+    const id = requestAnimationFrame(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [renameTarget, getSessionTitle]);
+
   // Refetch when the user switches back to this tab after being in a session
   useEffect(() => {
     const onVisible = () => {
@@ -418,6 +504,81 @@ export default function DashboardPage() {
       setIsCreatingBlank(false);
     }
   }, [isCreatingBlank, router]);
+
+  const handleRename = useCallback((session: SessionListEntry) => {
+    setRenameTarget(session);
+  }, []);
+
+  const handleRenameConfirm = useCallback(async () => {
+    if (!renameTarget || isRenaming) return;
+    const trimmed = renameValue.trim() || "Untitled Whiteboard";
+    setIsRenaming(true);
+    const res = await updateSessionTitle(renameTarget.id, trimmed);
+    if (res.ok) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === renameTarget.id ? { ...s, title: trimmed } : s)),
+      );
+      setRenameTarget(null);
+    } else {
+      toast.error(res.error || "Failed to rename whiteboard");
+    }
+    setIsRenaming(false);
+  }, [renameTarget, renameValue, isRenaming]);
+
+  const handleRenameCancel = useCallback(() => {
+    if (isRenaming) return;
+    setRenameTarget(null);
+  }, [isRenaming]);
+
+  const handleDelete = useCallback((session: SessionListEntry) => {
+    setDeleteTarget(session);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget || isDeleting) return;
+    setIsDeleting(true);
+    const res = await deleteSession(deleteTarget.id);
+    if (res.ok) {
+      setSessions((prev) => prev.filter((s) => s.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      toast.success("Whiteboard deleted");
+    } else {
+      toast.error(res.error || "Failed to delete whiteboard");
+    }
+    setIsDeleting(false);
+  }, [deleteTarget, isDeleting]);
+
+  const handleDeleteCancel = useCallback(() => {
+    if (isDeleting) return;
+    setDeleteTarget(null);
+  }, [isDeleting]);
+
+  const handleDownload = useCallback(
+    async (session: SessionListEntry) => {
+      const result = await loadSnapshot(session.id);
+      if (!result.ok) {
+        if (result.status === 404) {
+          toast.error("No snapshot to download yet");
+        } else {
+          toast.error(result.error || "Failed to download snapshot");
+        }
+        return;
+      }
+      const title = getSessionTitle(session);
+      const safeName = title
+        .trim()
+        .replace(/[^\w\s-]/g, "")
+        .replace(/\s+/g, "-")
+        .toLowerCase();
+      const filename = safeName ? `${safeName}.png` : "whiteboard.png";
+      try {
+        await downloadSnapshotAsPng(result.data, filename);
+      } catch {
+        toast.error("Failed to download snapshot");
+      }
+    },
+    [getSessionTitle],
+  );
 
   const sortLabels: Record<SortOption, string> = {
     recent: "Last opened",
@@ -569,7 +730,13 @@ export default function DashboardPage() {
               <NotebookCard key={notebook.id} notebook={notebook} />
             ))}
             {sessions.map((session) => (
-              <WhiteboardCard key={session.id} session={session} />
+              <WhiteboardCard
+                key={session.id}
+                session={session}
+                onRename={handleRename}
+                onDownload={handleDownload}
+                onDelete={handleDelete}
+              />
             ))}
           </div>
         )}
@@ -587,9 +754,12 @@ export default function DashboardPage() {
                   <BookOpen className="size-4 text-primary" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground truncate">
-                    {notebook.title}
-                  </p>
+                  <MathLiveStatic
+                    latex={normalizeLatexForDisplay(notebook.title)}
+                    className="text-sm font-medium text-foreground truncate block"
+                    ariaLabel="Notebook title"
+                    block
+                  />
                   <p className="text-[11px] text-muted-foreground mt-0.5">
                     Notebook • {notebook.problem_count} problem{notebook.problem_count === 1 ? "" : "s"}
                   </p>
@@ -642,6 +812,74 @@ export default function DashboardPage() {
           </div>
         )}
       </section>
+
+      {renameTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-40)]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rename-dialog-title"
+          onClick={(e) => e.target === e.currentTarget && handleRenameCancel()}
+        >
+          <div
+            className="bg-card rounded-2xl shadow-xl border border-[var(--neutral-200)] p-5 w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); handleRenameCancel(); }
+              else if (e.key === "Enter") { e.preventDefault(); handleRenameConfirm(); }
+            }}
+          >
+            <h2 id="rename-dialog-title" className="text-base font-semibold text-foreground mb-1">Rename</h2>
+            <p className="text-sm text-muted-foreground mb-4">Please enter a new name for the item:</p>
+            <Input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              placeholder={renamePlaceholder}
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" size="sm" onClick={handleRenameCancel} disabled={isRenaming}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleRenameConfirm} disabled={isRenaming}>
+                {isRenaming ? "Saving..." : "OK"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-40)]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+          onClick={(e) => e.target === e.currentTarget && handleDeleteCancel()}
+        >
+          <div
+            className="bg-card rounded-2xl shadow-xl border border-[var(--neutral-200)] p-5 w-full max-w-md mx-4"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); handleDeleteCancel(); }
+              else if (e.key === "Enter") { e.preventDefault(); handleDeleteConfirm(); }
+            }}
+          >
+            <h2 id="delete-dialog-title" className="text-base font-semibold text-foreground mb-1">Delete whiteboard?</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              This will permanently delete &quot;{getSessionTitle(deleteTarget)}&quot; and its history.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={handleDeleteCancel} disabled={isDeleting}>
+                Cancel
+              </Button>
+              <Button variant="destructive" size="sm" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                {isDeleting ? "Deleting..." : "Delete"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

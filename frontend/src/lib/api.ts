@@ -197,6 +197,13 @@ export async function updateSessionTitle(
   });
 }
 
+/** DELETE /api/v1/sessions/{sessionId} — delete a session. */
+export async function deleteSession(sessionId: string): Promise<ApiResponse<null>> {
+  return apiFetch(`/api/v1/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
 /** PATCH /api/v1/sessions/{sessionId} — update the session's status. */
 export async function updateSessionStatus(
   sessionId: string,

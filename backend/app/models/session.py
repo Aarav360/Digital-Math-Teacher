@@ -25,13 +25,13 @@ class Session(Base, TimestampMixin):
     user: Mapped["User"] = relationship("User", back_populates="sessions")
     problem: Mapped["Problem | None"] = relationship("Problem", back_populates="sessions")
     canvas_snapshots: Mapped[list["CanvasSnapshot"]] = relationship(
-        "CanvasSnapshot", back_populates="session", lazy="selectin"
+        "CanvasSnapshot", back_populates="session", lazy="selectin", passive_deletes=True
     )
     steps: Mapped[list["Step"]] = relationship(
-        "Step", back_populates="session", lazy="selectin"
+        "Step", back_populates="session", lazy="selectin", passive_deletes=True
     )
     chat_messages: Mapped[list["ChatMessage"]] = relationship(
-        "ChatMessage", back_populates="session", lazy="selectin"
+        "ChatMessage", back_populates="session", lazy="selectin", passive_deletes=True
     )
     notebook_problem: Mapped["NotebookProblem | None"] = relationship(
         "NotebookProblem", back_populates="session", uselist=False, lazy="selectin"

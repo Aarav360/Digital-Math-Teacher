@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { saveSnapshot, loadSnapshot } from "@/lib/api";
 import { getToken, getApiBase } from "@/lib/auth";
+import { getCssVar, resolveCssColor } from "@/lib/theme";
 import { toast } from "sonner";
 import type { Stroke, ShapeItem, TextItem, ImageItem, GraphItem } from "../types";
 import {
@@ -44,6 +45,41 @@ export function useSnapshotPersistence({
   const canvasSizeRef = useRef({ width: 0, height: 0 });
   const imagesDirtyRef = useRef(false);
   const graphsDirtyRef = useRef(false);
+  const getDefaultInkColor = useCallback(
+    () => getCssVar("--ink-default") || "var(--ink-default)",
+    [],
+  );
+  const resolveColorValue = useCallback((value: string) => {
+    const fallback = getCssVar("--ink-default") || value;
+    return resolveCssColor(value, fallback);
+  }, []);
+
+  const normalizeStrokes = useCallback(
+    (strokes: Stroke[]) =>
+      strokes.map((stroke) => ({
+        ...stroke,
+        color: resolveColorValue(stroke.color),
+      })),
+    [resolveColorValue],
+  );
+
+  const normalizeShapes = useCallback(
+    (shapes: ShapeItem[]) =>
+      shapes.map((shape) => ({
+        ...shape,
+        color: resolveColorValue(shape.color),
+      })),
+    [resolveColorValue],
+  );
+
+  const normalizeTextItems = useCallback(
+    (textItems: TextItem[]) =>
+      textItems.map((item) => ({
+        ...item,
+        color: resolveColorValue(item.color),
+      })),
+    [resolveColorValue],
+  );
 
   // Tracks component mount state so autosave cleanup doesn't cancel saves on unmount
   const isMountedRef = useRef(true);
@@ -103,11 +139,13 @@ export function useSnapshotPersistence({
       .then(async (result) => {
         if (result.ok && result.data) {
           const { strokes_json, width, height } = result.data;
+          const defaultColor = getDefaultInkColor();
           const loadedStrokes = strokes_json.strokes?.length
             ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
               (strokes_json.strokes as Array<any>).map((s, i) => ({
                 ...s,
                 id: s.id ?? `loaded-stroke-${i}`,
+                color: s.color || defaultColor,
               })) as Stroke[]
             : [];
           const loadedShapes = strokes_json.shapes?.length
@@ -115,9 +153,13 @@ export function useSnapshotPersistence({
               (strokes_json.shapes as Array<any>).map((s, i) => ({
                 ...s,
                 id: s.id ?? `loaded-shape-${i}`,
+                color: s.color || defaultColor,
               })) as ShapeItem[]
             : [];
-          const loadedText = (strokes_json.textItems as TextItem[]) ?? [];
+          const loadedText = ((strokes_json.textItems as TextItem[]) ?? []).map((item) => ({
+            ...item,
+            color: item.color || defaultColor,
+          }));
           const loadedImages = (strokes_json.imageItems as ImageItem[]) ?? [];
           const loadedGraphs = (strokes_json.graphItems as GraphItem[]) ?? [];
 
@@ -176,25 +218,32 @@ export function useSnapshotPersistence({
           })();
 
           if (data && (data.strokes || data.shapes || data.textItems || data.imageItems || data.graphItems)) {
+            const defaultColor = getDefaultInkColor();
             const migrStrokes = data.strokes?.length
               ? (data.strokes as Array<Stroke & { id?: string }>).map((s, i) => ({
                   ...s,
                   id: s.id ?? `loaded-stroke-${i}`,
+                  color: s.color || defaultColor,
                 }))
               : [];
             const migrShapes = data.shapes?.length
               ? (data.shapes as Array<ShapeItem & { id?: string }>).map((s, i) => ({
                   ...s,
                   id: s.id ?? `loaded-shape-${i}`,
+                  color: s.color || defaultColor,
                 }))
               : [];
+            const migrTextItems = (data.textItems ?? []).map((item) => ({
+              ...item,
+              color: item.color || defaultColor,
+            }));
             const migrImages = data.imageItems ?? [];
             const migrGraphs = data.graphItems ?? [];
 
             replaceAll({
               strokes: migrStrokes,
               shapes: migrShapes,
-              textItems: data.textItems ?? [],
+              textItems: migrTextItems,
               imageItems: migrImages,
               graphItems: migrGraphs,
             });
@@ -204,11 +253,14 @@ export function useSnapshotPersistence({
 
             migrationAttemptedRef.current = true;
             const { width, height } = canvasSizeRef.current;
+            const normalizedMigrStrokes = normalizeStrokes(migrStrokes);
+            const normalizedMigrShapes = normalizeShapes(migrShapes);
+            const normalizedMigrTextItems = normalizeTextItems(migrTextItems);
             saveSnapshot(sessionId, {
                 strokes_json: {
-                  strokes: migrStrokes,
-                  shapes: migrShapes,
-                  textItems: data.textItems || [],
+                  strokes: normalizedMigrStrokes,
+                  shapes: normalizedMigrShapes,
+                  textItems: normalizedMigrTextItems,
                   imageItems: migrImages,
                   graphItems: migrGraphs,
                 },
@@ -287,10 +339,13 @@ export function useSnapshotPersistence({
         shapes: shapesRef.current,
         textItems: textItemsRef.current,
       });
+      const normalizedStrokes = normalizeStrokes(strokesRef.current);
+      const normalizedShapes = normalizeShapes(shapesRef.current);
+      const normalizedTextItems = normalizeTextItems(textItemsRef.current);
       const currentPayload = {
-        strokes: strokesRef.current,
-        shapes: shapesRef.current,
-        textItems: textItemsRef.current,
+        strokes: normalizedStrokes,
+        shapes: normalizedShapes,
+        textItems: normalizedTextItems,
         width,
         height,
       };
@@ -302,9 +357,9 @@ export function useSnapshotPersistence({
 
       saveSnapshot(sessionId, {
         strokes_json: {
-          strokes: strokesRef.current,
-          shapes: shapesRef.current,
-          textItems: textItemsRef.current,
+          strokes: normalizedStrokes,
+          shapes: normalizedShapes,
+          textItems: normalizedTextItems,
           // imageItems/graphItems intentionally excluded from autosave
         },
         width,
@@ -394,12 +449,15 @@ export function useSnapshotPersistence({
       shapes: shapesRef.current,
       textItems: textItemsRef.current,
     });
+    const normalizedStrokes = normalizeStrokes(strokesRef.current);
+    const normalizedShapes = normalizeShapes(shapesRef.current);
+    const normalizedTextItems = normalizeTextItems(textItemsRef.current);
     try {
       const result = await saveSnapshot(sessionId, {
         strokes_json: {
-          strokes: strokesRef.current,
-          shapes: shapesRef.current,
-          textItems: textItemsRef.current,
+          strokes: normalizedStrokes,
+          shapes: normalizedShapes,
+          textItems: normalizedTextItems,
           imageItems: imageItemsRef.current, // include images on explicit action
           graphItems: graphItemsRef.current,
         },
@@ -427,7 +485,18 @@ export function useSnapshotPersistence({
         saveControllerRef.current = null;
       }
     }
-  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef, graphItemsRef]);
+  }, [
+    sessionId,
+    currentUserId,
+    strokesRef,
+    shapesRef,
+    textItemsRef,
+    imageItemsRef,
+    graphItemsRef,
+    normalizeStrokes,
+    normalizeShapes,
+    normalizeTextItems,
+  ]);
 
   // ── Back-navigation save (keepalive for small payloads) ──────────────────
 
@@ -454,11 +523,14 @@ export function useSnapshotPersistence({
     if (!strokesDirty && !imagesDirtyRef.current && !graphsDirtyRef.current) return;
 
     const { width, height } = canvasSizeRef.current;
+    const normalizedStrokes = normalizeStrokes(strokesRef.current);
+    const normalizedShapes = normalizeShapes(shapesRef.current);
+    const normalizedTextItems = normalizeTextItems(textItemsRef.current);
     const payload = {
       strokes_json: {
-        strokes: strokesRef.current,
-        shapes: shapesRef.current,
-        textItems: textItemsRef.current,
+        strokes: normalizedStrokes,
+        shapes: normalizedShapes,
+        textItems: normalizedTextItems,
         imageItems: imageItemsRef.current,
         graphItems: graphItemsRef.current,
       },
@@ -491,9 +563,9 @@ export function useSnapshotPersistence({
       let backupSucceeded = false;
       try {
         backupSucceeded = tryWriteLocalBackup(sessionId, {
-          strokes: strokesRef.current,
-          shapes: shapesRef.current,
-          textItems: textItemsRef.current,
+          strokes: normalizedStrokes,
+          shapes: normalizedShapes,
+          textItems: normalizedTextItems,
           width,
           height,
         });
@@ -539,7 +611,19 @@ export function useSnapshotPersistence({
         }
       }
     }
-  }, [sessionId, currentUserId, strokesRef, shapesRef, textItemsRef, imageItemsRef, graphItemsRef, tryWriteLocalBackup]);
+  }, [
+    sessionId,
+    currentUserId,
+    strokesRef,
+    shapesRef,
+    textItemsRef,
+    imageItemsRef,
+    graphItemsRef,
+    tryWriteLocalBackup,
+    normalizeStrokes,
+    normalizeShapes,
+    normalizeTextItems,
+  ]);
 
   return {
     isLoadingSnapshot,

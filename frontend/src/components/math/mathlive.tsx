@@ -89,7 +89,9 @@ export const MathLiveField = forwardRef<MathfieldElement, MathLiveFieldProps>(
       }
       field.readOnly = readOnly;
       field.setAttribute("data-multiline", multiline ? "true" : "false");
-      if (placeholder) field.setAttribute("placeholder", placeholder);
+      if (placeholder) {
+        field.setAttribute("placeholder", formatPlaceholder(placeholder, multiline));
+      }
     }, [readOnly, placeholder, multiline]);
 
     useEffect(() => {
@@ -201,4 +203,17 @@ function stripDisplayLines(value: string) {
     return value.slice(prefix.length, -suffix.length);
   }
   return value;
+}
+
+function formatPlaceholder(value: string, multiline: boolean) {
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/{/g, "\\{")
+    .replace(/}/g, "\\}");
+  const lines = escaped.split("\n").map((line) => `\\text{${line}}`);
+  const content = lines.join(" \\\\ ");
+  if (multiline && lines.length > 1) {
+    return `\\displaylines{${content}}`;
+  }
+  return content;
 }

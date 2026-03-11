@@ -42,6 +42,7 @@ import { useSelection } from "./hooks/useSelection";
 import { useFeedback } from "./hooks/useFeedback";
 import { useChat } from "./hooks/useChat";
 import { MathLiveField, MathLiveStatic } from "@/components/math/mathlive";
+import { isLatexLike, normalizeLatexForDisplay } from "@/lib/latex";
 import { getCssVar } from "@/lib/theme";
 import { useTheme } from "@/hooks/useTheme";
 
@@ -1321,7 +1322,14 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   ) : (
                     <p className="text-sm font-medium text-foreground whitespace-pre-line text-center">
                       {problemDraft ? (
-                        <MathLiveStatic latex={problemDraft} ariaLabel="Problem statement" />
+                        isLatexLike(problemDraft) ? (
+                          <MathLiveStatic
+                            latex={normalizeLatexForDisplay(problemDraft)}
+                            ariaLabel="Problem statement"
+                          />
+                        ) : (
+                          problemDraft
+                        )
                       ) : null}
                     </p>
                   )}

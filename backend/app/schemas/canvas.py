@@ -1,6 +1,13 @@
 """Canvas snapshot request/response schemas."""
 from datetime import datetime
-from pydantic import BaseModel
+import re
+from pydantic import BaseModel, field_validator
+
+HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+RGBA_COLOR_RE = re.compile(
+    r"^rgba\(\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:0|1|0?\.\d+)\s*\)$",
+    re.IGNORECASE,
+)
 
 
 class StrokePoint(BaseModel):
@@ -11,10 +18,19 @@ class StrokePoint(BaseModel):
 class StrokeIn(BaseModel):
     id: str | None = None
     points: list[float] | list[StrokePoint]  # [x1,y1,x2,y2,...] or [{x,y},...]
-    color: str = "var(--ink-default)"
+    color: str | None = None
     width: float = 2.0
     tool: str = "pen"
     timestamp: str | None = None
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if HEX_COLOR_RE.match(value) or RGBA_COLOR_RE.match(value):
+            return value
+        raise ValueError("color must be a hex or rgba() string")
 
 
 class CanvasSnapshotCreate(BaseModel):

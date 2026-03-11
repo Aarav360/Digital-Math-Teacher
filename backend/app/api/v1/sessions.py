@@ -1,6 +1,6 @@
 """Sessions: create, get, list, update."""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 import sqlalchemy as sa
 
@@ -11,6 +11,8 @@ from app.models.notebook import Notebook
 from app.models.problem import Problem
 from app.models.step import Step, StepEvaluation
 from app.models.canvas_snapshot import CanvasSnapshot
+from app.models.step import Step
+from app.models.chat_message import ChatMessage
 from app.schemas.session import SessionCreate, SessionUpdate, SessionRead, SessionWithProblem, SessionListEntry
 from app.schemas.canvas import SnapshotUpdate, SnapshotResponse
 
@@ -178,6 +180,29 @@ async def update_session(session_id: str, body: SessionUpdate, user_id: CurrentU
     await db.flush()
     await db.refresh(session)
     return session
+
+
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(session_id: str, user_id: CurrentUserId, db: DbSession):
+    result = await db.execute(
+        select(Session)
+        .options(selectinload(Session.notebook_problem))
+        .where(Session.id == session_id, Session.user_id == user_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if session.notebook_problem is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete a notebook-linked session",
+        )
+    await db.execute(delete(CanvasSnapshot).where(CanvasSnapshot.session_id == session_id))
+    await db.execute(delete(Step).where(Step.session_id == session_id))
+    await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
+    await db.delete(session)
+    await db.flush()
+    return None
 
 
 @router.put("/{session_id}/snapshot", status_code=status.HTTP_201_CREATED, response_model=SnapshotResponse)
