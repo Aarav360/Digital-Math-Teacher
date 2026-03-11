@@ -51,17 +51,17 @@ function formatRelativeDate(dateStr: string) {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function getTopicColor(topic: string | null) {
-  const map: Record<string, string> = {
-    "Algebra 1": "#2A7BD4",
-    "Algebra 2": "#2A7BD4",
-    "Calc 1": "#34c759",
-    "Calc 2": "#34c759",
-    Trig: "#ff9500",
-    "Pre-Calc": "#ff9500",
-    "Linear Algebra": "#af52de",
+function getTopicPalette(topic: string | null) {
+  const map: Record<string, { color: string; soft: string; softest: string }> = {
+    "Algebra 1": { color: "var(--topic-algebra)", soft: "var(--topic-algebra-soft)", softest: "var(--topic-algebra-softest)" },
+    "Algebra 2": { color: "var(--topic-algebra)", soft: "var(--topic-algebra-soft)", softest: "var(--topic-algebra-softest)" },
+    "Calc 1": { color: "var(--topic-calc)", soft: "var(--topic-calc-soft)", softest: "var(--topic-calc-softest)" },
+    "Calc 2": { color: "var(--topic-calc)", soft: "var(--topic-calc-soft)", softest: "var(--topic-calc-softest)" },
+    Trig: { color: "var(--topic-trig)", soft: "var(--topic-trig-soft)", softest: "var(--topic-trig-softest)" },
+    "Pre-Calc": { color: "var(--topic-trig)", soft: "var(--topic-trig-soft)", softest: "var(--topic-trig-softest)" },
+    "Linear Algebra": { color: "var(--topic-linear)", soft: "var(--topic-linear-soft)", softest: "var(--topic-linear-softest)" },
   };
-  return (topic && map[topic]) || "#6e6e73";
+  return map[topic ?? ""] ?? { color: "var(--muted-foreground)", soft: "var(--neutral-100)", softest: "var(--neutral-100)" };
 }
 
 /** Deterministic SVG thumbnail path + color based on session id */
@@ -89,18 +89,18 @@ function getThumbnailStyle(id: string) {
     "M 18 62 Q 38 28 58 62 Q 78 96 98 62 Q 118 28 138 62",
   ];
   const colors = [
-    "#2A7BD4",
-    "#34C759",
-    "#FF9500",
-    "#AF52DE",
-    "#FF2D55",
-    "#5AC8FA",
-    "#FF9F0A",
-    "#30B0C7",
-    "#8E8E93",
-    "#7D5FFF",
-    "#A2845E",
-    "#40C463",
+    "var(--palette-1)",
+    "var(--palette-2)",
+    "var(--palette-3)",
+    "var(--palette-4)",
+    "var(--palette-5)",
+    "var(--palette-6)",
+    "var(--palette-7)",
+    "var(--palette-8)",
+    "var(--palette-9)",
+    "var(--palette-10)",
+    "var(--palette-11)",
+    "var(--palette-12)",
   ];
   return {
     path: paths[seed % paths.length],
@@ -154,8 +154,8 @@ function TemplateCard({
       <div
         className="w-[132px] h-[96px] rounded-md border border-border bg-card flex items-center justify-center transition-all group-hover:shadow-md overflow-hidden"
         style={{
-          borderColor: `${template.color}40`,
-          background: `linear-gradient(135deg, ${template.color}08, ${template.color}04)`,
+          borderColor: template.borderColor,
+          background: `linear-gradient(135deg, ${template.surfaceColor}, ${template.surfaceColorSoft})`,
         }}
       >
         <Icon
@@ -192,7 +192,7 @@ function NotebookTemplateCard() {
 
 function WhiteboardCard({ session }: { session: SessionListEntry }) {
   const { path, color: thumbColor } = getThumbnailStyle(session.id);
-  const color = getTopicColor(session.topic);
+  const { color, soft } = getTopicPalette(session.topic);
   const displayTitle = session.title ?? session.problem_title ?? "Untitled Whiteboard";
   const normalizedStatus = normalizeSessionStatus(session.status);
 
@@ -205,7 +205,7 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
         {/* Thumbnail preview */}
         <div className="aspect-[4/3] rounded-t-md border border-border bg-card overflow-hidden relative transition-all group-hover:border-primary/30 group-hover:shadow-md">
           <div className="absolute top-2 left-2 z-10">
-            <span className={`inline-block h-2.5 w-2.5 rounded-full ${SESSION_STATUS_COLORS[normalizedStatus]} ring-1 ring-white/80`} />
+            <span className={`inline-block h-2.5 w-2.5 rounded-full ${SESSION_STATUS_COLORS[normalizedStatus]} ring-1 ring-[var(--surface-glass-80)]`} />
           </div>
           <svg
             className="absolute inset-0 w-full h-full"
@@ -252,7 +252,7 @@ function WhiteboardCard({ session }: { session: SessionListEntry }) {
           <div className="flex items-center gap-1.5 mt-1">
             <span
               className="inline-block w-4 h-4 rounded-sm flex items-center justify-center"
-              style={{ backgroundColor: `${color}18` }}
+              style={{ backgroundColor: soft }}
             >
               <span
                 className="block w-2 h-2 rounded-[2px]"
@@ -602,7 +602,7 @@ export default function DashboardPage() {
               </Link>
             ))}
             {sessions.map((session) => {
-              const color = getTopicColor(session.topic);
+              const { color, softest } = getTopicPalette(session.topic);
               const normalizedStatus = normalizeSessionStatus(session.status);
               return (
                 <Link
@@ -612,7 +612,7 @@ export default function DashboardPage() {
                 >
                   <span
                     className="inline-flex items-center justify-center w-8 h-8 rounded-md shrink-0"
-                    style={{ backgroundColor: `${color}14` }}
+                    style={{ backgroundColor: softest }}
                   >
                     <span
                       className="block w-3 h-3 rounded-sm"

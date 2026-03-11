@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Point, Tool } from "../types";
-import { GRID_STEP, GRID_COLOR } from "../constants";
+import { GRID_STEP, GRID_COLOR_VAR } from "../constants";
 import type { WhiteboardContent } from "./useWhiteboardContent";
 import type { RedrawSignal } from "./useRedrawSignal";
 import type { ViewTransform } from "./useViewTransform";
+import { getCssVar, resolveCssColor } from "@/lib/theme";
+import { useTheme } from "@/hooks/useTheme";
 
 interface CanvasDrawingArgs {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -112,6 +114,23 @@ export function useCanvasDrawing({
   const { registerRedrawHandler, requestRedraw } = redraw;
   const failedImagesRef = useRef<Set<string>>(new Set());
   const failedGraphsRef = useRef<Set<string>>(new Set());
+  const { resolvedTheme } = useTheme();
+  const themeColorsRef = useRef({
+    canvasBg: getCssVar("--canvas-bg"),
+    canvasGrid: getCssVar(GRID_COLOR_VAR),
+    selection: getCssVar("--canvas-selection"),
+    selectionStrong: getCssVar("--canvas-selection-strong"),
+  });
+
+  useEffect(() => {
+    themeColorsRef.current = {
+      canvasBg: getCssVar("--canvas-bg"),
+      canvasGrid: getCssVar(GRID_COLOR_VAR),
+      selection: getCssVar("--canvas-selection"),
+      selectionStrong: getCssVar("--canvas-selection-strong"),
+    };
+    requestRedraw();
+  }, [resolvedTheme, requestRedraw]);
 
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -120,12 +139,14 @@ export function useCanvasDrawing({
     if (!ctx) return;
     const { width: W, height: H } = canvasSizeRef.current;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const { canvasBg, canvasGrid, selection, selectionStrong } = themeColorsRef.current;
+    const resolvedPenColor = resolveCssColor(penColor, penColor);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (!(showGrid && constantGridSize)) {
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = canvasBg;
       ctx.fillRect(0, 0, W, H);
     }
 
@@ -135,7 +156,7 @@ export function useCanvasDrawing({
 
     // Grid on canvas (only when grid is on and NOT constant size; constant-size grid is CSS on wrapper)
     if (showGrid && !constantGridSize) {
-      ctx.strokeStyle = GRID_COLOR;
+      ctx.strokeStyle = canvasGrid;
       ctx.lineWidth = 1;
       const left = -pan.x / scale - 50;
       const top = -pan.y / scale - 50;
@@ -197,7 +218,7 @@ export function useCanvasDrawing({
     for (let i = 0; i < shapes.length; i++) {
       const s = shapes[i];
       const selected = selectedShapeIndices.has(i);
-      drawShape(ctx, s, selected ? "#3b82f6" : undefined, selected ? s.width + 2 : undefined);
+      drawShape(ctx, s, selected ? selection : undefined, selected ? s.width + 2 : undefined);
     }
 
     // Preview shape (live drag preview: dashed, slightly transparent)
@@ -215,10 +236,10 @@ export function useCanvasDrawing({
       if (stroke.points.length < 2) continue;
       const selected = selectedStrokeIndices.has(i);
       ctx.strokeStyle = selected
-        ? "#3b82f6"
+        ? selection
         : stroke.tool === "eraser" || stroke.tool === "eraserPartial"
-          ? "#ffffff"
-          : stroke.color;
+          ? canvasBg
+          : resolveCssColor(stroke.color, stroke.color);
       ctx.lineWidth = selected
         ? stroke.width + 2
         : stroke.tool === "eraser"
@@ -242,7 +263,7 @@ export function useCanvasDrawing({
     const cur = currentStrokeRef.current;
     if (cur.length >= 2) {
       ctx.strokeStyle =
-        tool === "eraser" || tool === "eraserPartial" ? "#ffffff" : penColor;
+        tool === "eraser" || tool === "eraserPartial" ? canvasBg : resolvedPenColor;
       ctx.lineWidth =
         tool === "eraser"
           ? penWidth * 5
@@ -263,7 +284,7 @@ export function useCanvasDrawing({
 
     // Selection lasso overlay
     if (lassoPoints.length >= 2) {
-      ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
+      ctx.strokeStyle = selectionStrong;
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -277,7 +298,7 @@ export function useCanvasDrawing({
     if (boxStart) {
       const boxEnd = selectionBoxEndRef.current;
       if (boxEnd) {
-        ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
+        ctx.strokeStyle = selectionStrong;
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.strokeRect(
@@ -371,7 +392,7 @@ export function useCanvasDrawing({
     const ctx = off.getContext("2d");
     if (!ctx) return;
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = getCssVar("--canvas-bg");
     ctx.fillRect(0, 0, W, H);
     ctx.save();
     ctx.translate(pan.x, pan.y);
@@ -410,8 +431,8 @@ export function useCanvasDrawing({
       if (stroke.points.length < 2) continue;
       ctx.strokeStyle =
         stroke.tool === "eraser" || stroke.tool === "eraserPartial"
-          ? "#ffffff"
-          : stroke.color;
+          ? getCssVar("--canvas-bg")
+          : resolveCssColor(stroke.color, stroke.color);
       ctx.lineWidth =
         stroke.tool === "eraser"
           ? stroke.width * 5

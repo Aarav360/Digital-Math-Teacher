@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1.router import api_router
 from app.services.scheduler import start_scheduler, stop_scheduler
+from app.services.sample_problems import seed_sample_problems
 
 app = FastAPI(
     title=settings.app_name,
@@ -30,6 +31,7 @@ app.include_router(api_router)
 @app.on_event("startup")
 async def on_startup() -> None:
     start_scheduler()
+    await seed_sample_problems()
 
 
 @app.on_event("shutdown")

@@ -46,8 +46,8 @@ function HistoryTypeIcon({ session }: { session: SessionListEntry }) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="w-8 h-8 rounded-md bg-white border border-dashed border-slate-300 flex items-center justify-center shrink-0">
-            <Plus className="size-4 text-slate-400" />
+          <div className="w-8 h-8 rounded-md bg-card border border-dashed border-[var(--neutral-300)] flex items-center justify-center shrink-0">
+            <Plus className="size-4 text-[var(--neutral-400)]" />
           </div>
         </TooltipTrigger>
         <TooltipContent sideOffset={6}>
@@ -66,8 +66,8 @@ function HistoryTypeIcon({ session }: { session: SessionListEntry }) {
           <div
             className="w-8 h-8 rounded-md border border-transparent flex items-center justify-center shrink-0"
             style={{
-              borderColor: `${template.color}40`,
-              background: `${template.color}14`,
+              borderColor: template.borderColor,
+              background: template.surfaceColor,
             }}
           >
             <Icon className="size-4" style={{ color: template.color }} strokeWidth={1.6} />
@@ -81,8 +81,8 @@ function HistoryTypeIcon({ session }: { session: SessionListEntry }) {
   }
 
   return (
-    <div className="w-8 h-8 rounded-md bg-slate-100 flex items-center justify-center shrink-0">
-      <BookOpen className="size-4 text-slate-400" />
+    <div className="w-8 h-8 rounded-md bg-[var(--neutral-100)] flex items-center justify-center shrink-0">
+      <BookOpen className="size-4 text-[var(--neutral-400)]" />
     </div>
   );
 }
@@ -91,13 +91,13 @@ function statusBadge(status: string) {
   const normalized = normalizeSessionStatus(status);
   switch (normalized) {
     case "completed":
-      return "bg-green-50 text-green-700";
+      return "bg-[var(--green-50)] text-[var(--green-700)]";
     case "needs_review":
-      return "bg-rose-50 text-rose-700";
+      return "bg-[var(--rose-50)] text-[var(--rose-700)]";
     case "in_progress":
-      return "bg-amber-50 text-amber-700";
+      return "bg-[var(--amber-50)] text-[var(--amber-700)]";
     default:
-      return "bg-slate-100 text-slate-600";
+      return "bg-[var(--neutral-100)] text-[var(--neutral-600)]";
   }
 }
 
@@ -131,8 +131,8 @@ export default function HistoryPage() {
       <div className="relative z-10">
       <h1 className="text-2xl font-bold text-foreground mb-6">Session History</h1>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="grid grid-cols-[1fr_120px_140px_100px_120px] gap-4 px-5 py-3 border-b border-slate-100 text-xs font-medium text-muted-foreground">
+      <div className="bg-card rounded-2xl border border-[var(--neutral-200)] shadow-sm overflow-hidden">
+        <div className="grid grid-cols-[1fr_120px_140px_100px_120px] gap-4 px-5 py-3 border-b border-[var(--neutral-100)] text-xs font-medium text-muted-foreground">
           <span>Problem</span>
           <span>Topic</span>
           <span>Last Activity</span>
@@ -151,7 +151,7 @@ export default function HistoryPage() {
         {/* Error */}
         {!loading && error && (
           <div className="px-5 py-12 flex flex-col items-center gap-2 text-sm text-muted-foreground">
-            <AlertCircle className="size-5 text-red-400" />
+            <AlertCircle className="size-5 text-[var(--red-400)]" />
             <p>{error}</p>
           </div>
         )}
@@ -171,7 +171,7 @@ export default function HistoryPage() {
           <Link
             key={session.id}
             href={`/session/${session.id}`}
-            className="grid grid-cols-[1fr_120px_140px_100px_120px] gap-4 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center group"
+            className="grid grid-cols-[1fr_120px_140px_100px_120px] gap-4 px-5 py-3.5 border-b border-[var(--neutral-50)] hover:bg-[var(--neutral-50)] transition-colors items-center group"
           >
             <div className="flex items-center gap-3 min-w-0">
               <HistoryTypeIcon session={session} />

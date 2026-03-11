@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useCallback } from "react";
 import { gsap } from "gsap";
 import { cn } from "@/lib/utils";
@@ -19,10 +19,15 @@ const EASE = "power3.out";
 
 export function AppNav() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const circleRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const tlRefs = useRef<(gsap.core.Timeline | null)[]>([]);
   const activeTweenRefs = useRef<(gsap.core.Tween | null)[]>([]);
   const pillRefs = useRef<(HTMLAnchorElement | null)[]>([]);
+
+  const fromSessionParam = searchParams?.get("fromSession") ?? "";
+  const sessionIdFromPath = pathname?.startsWith("/session/") ? pathname.split("/")[2] : "";
+  const sessionId = sessionIdFromPath || fromSessionParam;
 
   const activeIndex = navItems.findIndex(
     (item) => pathname === item.href || pathname.startsWith(item.href + "/")
@@ -138,11 +143,11 @@ export function AppNav() {
   };
 
   return (
-    <header className="h-14 border-b border-border bg-white/80 backdrop-blur-xl flex items-center px-6 shrink-0 z-50">
+    <header className="h-14 border-b border-border bg-[var(--surface-glass-80)] backdrop-blur-xl flex items-center px-6 shrink-0 z-50">
       {/* Logo - untouched */}
       <Link href="/app" className="flex items-center gap-2 mr-8">
         <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
-          <span className="text-white font-bold text-sm">M</span>
+          <span className="text-primary-foreground font-bold text-sm">M</span>
         </div>
         <span className="font-semibold text-foreground text-sm">MathTeacher</span>
       </Link>
@@ -182,10 +187,14 @@ export function AppNav() {
         {navItems.slice(3, 5).map((item, i) => {
           const idx = i + 3;
           const isActive = activeIndex === idx;
+          const needsSessionReturn = Boolean(sessionId) && (item.href === "/about" || item.href === "/settings");
+          const href = needsSessionReturn
+            ? `${item.href}?fromSession=${encodeURIComponent(sessionId)}`
+            : item.href;
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={href}
               ref={(el) => { pillRefs.current[idx] = el; }}
               onMouseEnter={() => handleEnter(idx)}
               onMouseLeave={() => handleLeave(idx)}

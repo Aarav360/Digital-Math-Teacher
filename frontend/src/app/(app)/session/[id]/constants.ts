@@ -9,9 +9,8 @@ export const ZOOM_STEP_DEFAULT = 1.1;
 export const ZOOM_SPEED_STORAGE_KEY = "whiteboard-zoom-speed";
 export const CONSTANT_GRID_STORAGE_KEY = "whiteboard-constant-grid-size";
 export const STATIC_GRID_SIZE_PX = 20;
-export const GRID_COLOR = "#f0f0f0";
-
-export const DEFAULT_PEN_COLOR = "#1d1d1f";
+export const GRID_COLOR_VAR = "--canvas-grid";
+export const DEFAULT_PEN_COLOR_VAR = "--ink-default";
 export const TOOLBAR_BUTTON_HOVER =
   "transition-all duration-150 hover:brightness-[0.97] active:brightness-95";
 export const DEFAULT_WHITEBOARD_TITLE = "Untitled Whiteboard";

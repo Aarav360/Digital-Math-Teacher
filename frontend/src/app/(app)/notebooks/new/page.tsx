@@ -125,11 +125,11 @@ export default function NewNotebookPage() {
                   if (value.text.trim()) setTitleError(null);
                 }}
                 placeholder="Algebra Homework 2"
-                className={titleError ? "border-red-500 focus-visible:ring-red-500/40" : undefined}
+                className={titleError ? "border-[var(--red-500)] focus-visible:ring-[var(--red-500-40)]" : undefined}
                 ariaLabel="Notebook title"
               />
               {titleError && (
-                <p className="text-xs text-red-600">{titleError}</p>
+                <p className="text-xs text-[var(--red-600)]">{titleError}</p>
               )}
             </div>
 
@@ -202,12 +202,12 @@ export default function NewNotebookPage() {
               </Button>
             </div>
             {problemsError && (
-              <p className="text-xs text-red-600">{problemsError}</p>
+              <p className="text-xs text-[var(--red-600)]">{problemsError}</p>
             )}
 
             <div
               className={`space-y-2 max-h-[420px] overflow-y-auto pr-1 ${
-                problemsError ? "border border-red-500 rounded-lg p-2" : ""
+                problemsError ? "border border-[var(--red-500)] rounded-lg p-2" : ""
               }`}
             >
               {problems.length === 0 && (

@@ -1,6 +1,7 @@
 """Analysis: run step segmentation + OCR + evaluation (stub)."""
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUserId, DbSession
@@ -26,13 +27,14 @@ async def analyze_steps(body: AnalysisRequest, user_id: CurrentUserId, db: DbSes
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    usage_result = await db.execute(select(UserUsageCounter).where(UserUsageCounter.user_id == user_id))
-    usage = usage_result.scalar_one_or_none()
-    if usage is None:
-        usage = UserUsageCounter(user_id=user_id, analysis_runs=1)
-        db.add(usage)
-    else:
-        usage.analysis_runs += 1
+    await db.execute(
+        insert(UserUsageCounter)
+        .values(user_id=user_id, analysis_runs=1)
+        .on_conflict_do_update(
+            index_elements=[UserUsageCounter.user_id],
+            set_={"analysis_runs": UserUsageCounter.analysis_runs + 1},
+        )
+    )
     # Mark in progress while analysis runs (simpler status set)
     session.status = SessionStatus.IN_PROGRESS
     await db.flush()

@@ -346,7 +346,7 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             {Object.entries(statusCounts).map(([status, count]) => (
-              <span key={status} className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+              <span key={status} className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-[var(--neutral-100)] text-[var(--neutral-700)]">
                 <span className={`h-2 w-2 rounded-full ${SESSION_STATUS_COLORS[status as keyof typeof SESSION_STATUS_COLORS]}`} />
                 {SESSION_STATUS_LABELS[status as keyof typeof SESSION_STATUS_LABELS]} · {count}
               </span>
@@ -354,7 +354,7 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
           </div>
 
           {showAdd && (
-            <div className="mt-4 border border-slate-200 rounded-xl p-4 bg-slate-50">
+            <div className="mt-4 border border-[var(--neutral-200)] rounded-xl p-4 bg-[var(--neutral-50)]">
               <Tabs defaultValue="single">
                 <TabsList className="grid grid-cols-2 w-full">
                   <TabsTrigger value="single">Single</TabsTrigger>
@@ -402,7 +402,7 @@ export default function NotebookDetailPage({ params }: { params: { id: string } 
             return (
               <Card
                 key={problem.id}
-                className="p-4 flex items-start gap-3 border border-slate-200 bg-white"
+                className="p-4 flex items-start gap-3 border border-[var(--neutral-200)] bg-card"
                 draggable
                 onDragStart={() => handleDragStart(problem.id)}
                 onDragEnd={() => setDraggingId(null)}

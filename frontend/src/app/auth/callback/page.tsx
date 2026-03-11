@@ -36,14 +36,21 @@ export default function AuthCallbackPage() {
     }
     let cancelled = false;
     (async () => {
-      const res = await finishGoogleAuth(code);
-      if (cancelled) return;
-      if (res.ok) {
-        setToken(res.data.access_token);
-        router.replace("/app");
-        return;
+      try {
+        const res = await finishGoogleAuth(code);
+        if (cancelled) return;
+        if (res.ok) {
+          setToken(res.data.access_token);
+          router.replace("/app");
+          return;
+        }
+        setStatus("error");
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to finish Google auth", err);
+          setStatus("error");
+        }
       }
-      setStatus("error");
     })();
     return () => {
       cancelled = true;
@@ -52,8 +59,8 @@ export default function AuthCallbackPage() {
 
   if (status === "error") {
     return (
-      <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-6">
-        <div className="bg-white/60 backdrop-blur-xl border border-white/20 shadow-xl rounded-3xl p-8 w-full max-w-sm text-center">
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="bg-[var(--surface-glass-60)] backdrop-blur-xl border border-[var(--border-glass)] shadow-xl rounded-3xl p-8 w-full max-w-sm text-center">
           <h1 className="text-xl font-bold text-foreground mb-2">Sign-in failed</h1>
           <p className="text-sm text-muted-foreground mb-6">{errorMessage ?? "Sign-in failed. Please try again."}</p>
           <button
@@ -68,8 +75,8 @@ export default function AuthCallbackPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] flex items-center justify-center p-6">
-      <div className="bg-white/60 backdrop-blur-xl border border-white/20 shadow-xl rounded-3xl p-8 w-full max-w-sm text-center">
+    <div className="min-h-screen bg-background flex items-center justify-center p-6">
+      <div className="bg-[var(--surface-glass-60)] backdrop-blur-xl border border-[var(--border-glass)] shadow-xl rounded-3xl p-8 w-full max-w-sm text-center">
         <h1 className="text-xl font-bold text-foreground mb-2">Finishing sign-in…</h1>
         <p className="text-sm text-muted-foreground">Please wait.</p>
       </div>

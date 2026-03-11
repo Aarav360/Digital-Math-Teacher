@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -295,7 +296,7 @@ async def google_callback(state: str, code: str, db: DbSession):
         user = email_user
     else:
         user = User(
-            id=str(__import__("uuid").uuid4()),
+            id=str(uuid.uuid4()),
             email=email,
             name=token_info.get("name"),
             avatar_url=token_info.get("picture"),
@@ -366,11 +367,10 @@ async def google_finish(body: OAuthFinishRequest, db: DbSession):
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    expiry_days = 7 if user.is_guest else 30
     token = create_access_token(
         user.id,
-        expires_delta=timedelta(days=expiry_days),
-        extra_claims={"guest": user.is_guest},
+        expires_delta=timedelta(days=30),
+        extra_claims={"guest": False},
     )
     user.last_seen_at = now
 

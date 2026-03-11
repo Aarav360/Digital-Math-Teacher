@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { getCssVar, resolveCssColor } from "@/lib/theme";
 
 const VERT = `#version 300 es
 in vec2 position;
@@ -117,7 +118,7 @@ interface AuroraProps {
 }
 
 export default function Aurora({
-  colorStops = ["#5227FF", "#7cff67", "#5227FF"],
+  colorStops = ["var(--aurora-alt-1)", "var(--aurora-alt-2)", "var(--aurora-alt-1)"],
   amplitude = 1.0,
   blend = 0.5,
   speed = 1.0,
@@ -167,8 +168,10 @@ export default function Aurora({
         delete (geometry.attributes as Record<string, unknown>).uv;
       }
 
-      const stopsArray = colorStops.map((hex) => {
-        const c = new Color(hex);
+      const fallback = getCssVar("--aurora-alt-1");
+      const stopsArray = colorStops.map((stop) => {
+        const resolved = resolveCssColor(stop, fallback) || fallback;
+        const c = new Color(resolved);
         return [c.r, c.g, c.b];
       });
 
@@ -200,8 +203,10 @@ export default function Aurora({
         program.uniforms.uBlend.value = p.blend ?? 0.5;
 
         const stops = p.colorStops ?? colorStops;
-        program.uniforms.uColorStops.value = stops.map((hex) => {
-          const c = new Color(hex);
+        const fallbackStop = getCssVar("--aurora-alt-1");
+        program.uniforms.uColorStops.value = stops.map((stop) => {
+          const resolved = resolveCssColor(stop, fallbackStop) || fallbackStop;
+          const c = new Color(resolved);
           return [c.r, c.g, c.b];
         });
 

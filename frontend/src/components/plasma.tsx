@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { resolveCssColor } from "@/lib/theme";
 
 const hexToRgb = (hex: string): [number, number, number] => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -94,7 +95,7 @@ interface PlasmaProps {
 }
 
 export default function Plasma({
-  color = "#ffffff",
+  color = "var(--plasma-color)",
   speed = 1,
   direction = "forward",
   scale = 1,
@@ -114,8 +115,9 @@ export default function Plasma({
       const { Renderer, Program, Mesh, Triangle } = await import("ogl");
       if (cancelled || !containerEl) return;
 
-      const useCustomColor = color ? 1.0 : 0.0;
-      const customColorRgb = color ? hexToRgb(color) : [1, 1, 1];
+      const resolvedColor = resolveCssColor(color);
+      const useCustomColor = resolvedColor ? 1.0 : 0.0;
+      const customColorRgb = resolvedColor ? hexToRgb(resolvedColor) : [1, 1, 1];
       const directionMultiplier = direction === "reverse" ? -1.0 : 1.0;
 
       const renderer = new Renderer({

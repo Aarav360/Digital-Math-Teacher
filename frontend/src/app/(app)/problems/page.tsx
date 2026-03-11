@@ -197,7 +197,7 @@ export default function ProblemsPage() {
           placeholder="Search problems..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition"
+          className="w-full pl-10 pr-4 py-2.5 bg-card border border-[var(--neutral-200)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition"
         />
       </div>
 
@@ -215,8 +215,8 @@ export default function ProblemsPage() {
                 aria-pressed={selected}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                   selected
-                    ? "bg-primary text-white"
-                    : "bg-white border border-slate-200 text-foreground hover:bg-slate-50"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card border border-[var(--neutral-200)] text-foreground hover:bg-[var(--neutral-50)]"
                 }`}
               >
                 {t}
@@ -231,8 +231,8 @@ export default function ProblemsPage() {
             aria-pressed={filters.level.includes("ALL")}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
               filters.level.includes("ALL")
-                ? "bg-primary text-white"
-                : "bg-white border border-slate-200 text-foreground hover:bg-slate-50"
+                ? "bg-primary text-primary-foreground"
+                : "bg-card border border-[var(--neutral-200)] text-foreground hover:bg-[var(--neutral-50)]"
             }`}
           >
             All
@@ -247,8 +247,8 @@ export default function ProblemsPage() {
                 aria-pressed={selected}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                   selected
-                    ? "bg-primary text-white"
-                    : "bg-white border border-slate-200 text-foreground hover:bg-slate-50"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card border border-[var(--neutral-200)] text-foreground hover:bg-[var(--neutral-50)]"
                 }`}
               >
                 {d}
@@ -268,8 +268,8 @@ export default function ProblemsPage() {
                 aria-pressed={selected}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                   selected
-                    ? "bg-primary text-white"
-                    : "bg-white border border-slate-200 text-foreground hover:bg-slate-50"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card border border-[var(--neutral-200)] text-foreground hover:bg-[var(--neutral-50)]"
                 }`}
               >
                 {pt}
@@ -280,8 +280,8 @@ export default function ProblemsPage() {
       </div>
 
       {/* Problem list */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="grid grid-cols-[1fr_120px_80px_100px_80px] gap-4 px-5 py-3 border-b border-slate-100 text-xs font-medium text-muted-foreground">
+      <div className="bg-card rounded-2xl border border-[var(--neutral-200)] shadow-sm overflow-hidden">
+        <div className="grid grid-cols-[1fr_120px_80px_100px_80px] gap-4 px-5 py-3 border-b border-[var(--neutral-100)] text-xs font-medium text-muted-foreground">
           <span>Title</span>
           <span>Topic</span>
           <span>Level</span>
@@ -300,7 +300,7 @@ export default function ProblemsPage() {
         {/* Error */}
         {!loading && error && (
           <div className="px-5 py-12 flex flex-col items-center gap-3 text-sm text-muted-foreground">
-            <AlertCircle className="size-5 text-red-400" />
+            <AlertCircle className="size-5 text-[var(--red-400)]" />
             <p>{error}</p>
             <Button size="sm" variant="outline" className="gap-1.5" onClick={fetchProblems}>
               <RotateCcw className="size-3" />
@@ -320,7 +320,7 @@ export default function ProblemsPage() {
         {!loading && !error && filtered.map((problem) => (
           <div
             key={problem.id}
-            className="grid grid-cols-[1fr_120px_80px_100px_80px] gap-4 px-5 py-3.5 border-b border-slate-50 hover:bg-slate-50 transition-colors items-center group"
+            className="grid grid-cols-[1fr_120px_80px_100px_80px] gap-4 px-5 py-3.5 border-b border-[var(--neutral-50)] hover:bg-[var(--neutral-50)] transition-colors items-center group"
           >
             <span className="text-sm font-medium text-foreground truncate">{problem.title}</span>
             <span className="text-xs text-muted-foreground">{problem.topic}</span>
@@ -330,7 +330,7 @@ export default function ProblemsPage() {
                   <span
                     key={i}
                     className={`w-1.5 h-1.5 rounded-full ${
-                      i < problem.difficulty ? "bg-primary" : "bg-slate-200"
+                      i < problem.difficulty ? "bg-primary" : "bg-[var(--neutral-200)]"
                     }`}
                   />
                 ))}

@@ -1,11 +1,31 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowRight, MessageCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, MessageCircle } from "lucide-react";
 
-export default function AboutPage() {
+type AboutPageProps = {
+  searchParams?: {
+    fromSession?: string | string[];
+  };
+};
+
+export default function AboutPage({ searchParams }: AboutPageProps) {
+  const rawFromSession = searchParams?.fromSession;
+  const fromSession = Array.isArray(rawFromSession) ? rawFromSession[0] : rawFromSession;
+  const backHref = fromSession ? `/session/${fromSession}` : "";
+
   return (
     <div className="max-w-3xl mx-auto px-6 py-10">
+      {backHref && (
+        <div className="mb-6">
+          <Link href={backHref}>
+            <Button variant="outline" size="sm" className="rounded-full gap-2 text-xs">
+              <ArrowLeft className="size-3.5" />
+              Back to whiteboard
+            </Button>
+          </Link>
+        </div>
+      )}
       <h1 className="text-2xl font-bold text-foreground mb-8">About & Help</h1>
 
       <div className="space-y-8">
@@ -41,7 +61,7 @@ export default function AboutPage() {
         {/* What this app is NOT */}
         <section>
           <h2 className="text-lg font-semibold text-foreground mb-3">What this app is NOT</h2>
-          <Card className="shadow-sm border-yellow-200 bg-yellow-50/50">
+          <Card className="shadow-sm border-[var(--yellow-200)] bg-[var(--yellow-50-50)]">
             <CardContent className="pt-5 space-y-2">
               <p className="text-sm text-foreground">This is an educational tool, not a grading system.</p>
               <p className="text-sm text-foreground">It can make mistakes. Always think critically about the feedback.</p>

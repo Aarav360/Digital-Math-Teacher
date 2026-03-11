@@ -11,7 +11,7 @@ class StrokePoint(BaseModel):
 class StrokeIn(BaseModel):
     id: str | None = None
     points: list[float] | list[StrokePoint]  # [x1,y1,x2,y2,...] or [{x,y},...]
-    color: str = "#000000"
+    color: str = "var(--ink-default)"
     width: float = 2.0
     tool: str = "pen"
     timestamp: str | None = None

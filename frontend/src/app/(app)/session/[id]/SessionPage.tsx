@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
@@ -21,11 +21,10 @@ import { normalizeSessionStatus, SESSION_STATUS_COLORS, SESSION_STATUS_LABELS, t
 
 import type { Tool, Point, ShapeItem, Stroke } from "./types";
 import {
-  DEFAULT_PEN_COLOR,
+  DEFAULT_PEN_COLOR_VAR,
   DEFAULT_WHITEBOARD_TITLE,
   TOOLBAR_BUTTON_HOVER,
   STATIC_GRID_SIZE_PX,
-  GRID_COLOR,
   WHITEBOARD_NO_CLEAR_WARNING_PREFIX,
 } from "./constants";
 
@@ -43,6 +42,8 @@ import { useSelection } from "./hooks/useSelection";
 import { useFeedback } from "./hooks/useFeedback";
 import { useChat } from "./hooks/useChat";
 import { MathLiveField, MathLiveStatic } from "@/components/math/mathlive";
+import { getCssVar } from "@/lib/theme";
+import { useTheme } from "@/hooks/useTheme";
 
 export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const { currentUser } = useUser();
@@ -51,7 +52,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   // ── Tool state ──────────────────────────────────────────────────────────
   const [tool, setTool] = useState<Tool>("pen");
   const previousToolRef = useRef<Tool>("pen");
-  const [penColor, setPenColor] = useState(DEFAULT_PEN_COLOR);
+  const [penColor, setPenColor] = useState(() => getCssVar(DEFAULT_PEN_COLOR_VAR));
   const [penWidth, setPenWidth] = useState(2);
   const [isDrawing, setIsDrawing] = useState(false);
   const currentStrokeRef = useRef<Point[]>([]);
@@ -95,16 +96,22 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const DESMOS_API_KEY = process.env.NEXT_PUBLIC_DESMOS_API_KEY ?? "";
   const GRAPH_DEFAULT_WIDTH = 420;
   const GRAPH_DEFAULT_HEIGHT = 300;
-  const GRAPH_PLACEHOLDER_DATA_URL =
-    "data:image/svg+xml;utf8," +
-    encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${GRAPH_DEFAULT_WIDTH}" height="${GRAPH_DEFAULT_HEIGHT}" viewBox="0 0 ${GRAPH_DEFAULT_WIDTH} ${GRAPH_DEFAULT_HEIGHT}">
-        <rect width="100%" height="100%" fill="#ffffff"/>
-        <rect x="0.5" y="0.5" width="${GRAPH_DEFAULT_WIDTH - 1}" height="${GRAPH_DEFAULT_HEIGHT - 1}" fill="none" stroke="#e2e8f0"/>
-        <path d="M0 ${GRAPH_DEFAULT_HEIGHT / 2} H ${GRAPH_DEFAULT_WIDTH}" stroke="#e2e8f0" stroke-width="1"/>
-        <path d="M${GRAPH_DEFAULT_WIDTH / 2} 0 V ${GRAPH_DEFAULT_HEIGHT}" stroke="#e2e8f0" stroke-width="1"/>
-      </svg>`,
+  const { resolvedTheme } = useTheme();
+  const graphPlaceholderDataUrl = useMemo(() => {
+    const background = getCssVar("--canvas-bg");
+    const stroke = getCssVar("--neutral-200");
+    return (
+      "data:image/svg+xml;utf8," +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${GRAPH_DEFAULT_WIDTH}" height="${GRAPH_DEFAULT_HEIGHT}" viewBox="0 0 ${GRAPH_DEFAULT_WIDTH} ${GRAPH_DEFAULT_HEIGHT}">
+          <rect width="100%" height="100%" fill="${background}"/>
+          <rect x="0.5" y="0.5" width="${GRAPH_DEFAULT_WIDTH - 1}" height="${GRAPH_DEFAULT_HEIGHT - 1}" fill="none" stroke="${stroke}"/>
+          <path d="M0 ${GRAPH_DEFAULT_HEIGHT / 2} H ${GRAPH_DEFAULT_WIDTH}" stroke="${stroke}" stroke-width="1"/>
+          <path d="M${GRAPH_DEFAULT_WIDTH / 2} 0 V ${GRAPH_DEFAULT_HEIGHT}" stroke="${stroke}" stroke-width="1"/>
+        </svg>`,
+      )
     );
+  }, [resolvedTheme]);
 
   /**
    * Callback passed to useSession — sets the canonical title from session data
@@ -154,6 +161,12 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     handleChatInputResize();
   }, [chat.chatInput, handleChatInputResize]);
+
+  useEffect(() => {
+    if (!penColor) {
+      setPenColor(getCssVar(DEFAULT_PEN_COLOR_VAR));
+    }
+  }, [penColor]);
 
 
   const canvas = useCanvasDrawing({
@@ -459,7 +472,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
         width: GRAPH_DEFAULT_WIDTH,
         height: GRAPH_DEFAULT_HEIGHT,
         state: null,
-        thumbnailDataUrl: GRAPH_PLACEHOLDER_DATA_URL,
+        thumbnailDataUrl: graphPlaceholderDataUrl,
       });
       graphs.setSelectedGraphId(id);
       setTool(previousToolRef.current);
@@ -523,7 +536,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     resetIdleTimer,
     GRAPH_DEFAULT_WIDTH,
     GRAPH_DEFAULT_HEIGHT,
-    GRAPH_PLACEHOLDER_DATA_URL,
+    graphPlaceholderDataUrl,
     openGraphEditor,
   ]);
 
@@ -797,7 +810,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   if (session.isLoadingSession) {
     return (
-      <div className="h-full w-full flex items-center justify-center bg-slate-50">
+      <div className="h-full w-full flex items-center justify-center bg-[var(--neutral-50)]">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="size-6 text-primary animate-spin" />
           <p className="text-sm text-muted-foreground">Loading session...</p>
@@ -808,7 +821,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   if (session.sessionError || (!session.isBlank && !session.problem && !session.notebookProblem && !session.isLoadingSession)) {
     return (
-      <div className="h-full w-full flex items-center justify-center bg-slate-50">
+      <div className="h-full w-full flex items-center justify-center bg-[var(--neutral-50)]">
         <div className="flex flex-col items-center gap-4 text-center">
           <p className="text-sm text-muted-foreground">{session.sessionError || "Session not found"}</p>
           <Link href="/problems">
@@ -846,9 +859,9 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
   const statusIcon = (status: StepFeedback["status"]) => {
     switch (status) {
-      case "correct": return <Check className="size-3.5 text-green-600" />;
-      case "incorrect": return <X className="size-3.5 text-red-600" />;
-      case "warning": return <AlertTriangle className="size-3.5 text-yellow-600" />;
+      case "correct": return <Check className="size-3.5 text-[var(--green-600)]" />;
+      case "incorrect": return <X className="size-3.5 text-[var(--red-600)]" />;
+      case "warning": return <AlertTriangle className="size-3.5 text-[var(--yellow-600)]" />;
     }
   };
 
@@ -876,12 +889,12 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   // ── JSX ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className={cn("h-full w-full bg-slate-50 flex flex-col overflow-hidden", isResizing && "select-none")}>
+    <div className={cn("h-full w-full bg-[var(--neutral-50)] flex flex-col overflow-hidden", isResizing && "select-none")}>
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left column */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Header */}
-          <div className="h-12 border-b border-slate-200 bg-white/80 backdrop-blur-xl flex items-center px-4 gap-4 shrink-0 z-10">
+          <div className="h-12 border-b border-[var(--neutral-200)] bg-[var(--surface-glass-80)] backdrop-blur-xl flex items-center px-4 gap-4 shrink-0 z-10">
             <Button variant="ghost" size="icon-sm" className="rounded-full" onClick={handleBackNavigation}>
               <ArrowLeft className="size-4" />
             </Button>
@@ -894,7 +907,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   onChange={(e) => setWhiteboardTitle(e.target.value)}
                   onBlur={saveTitle}
                   onKeyDown={handleTitleKeyDown}
-                  className="text-sm font-medium text-foreground bg-transparent border rounded-md px-2 py-1 min-w-[180px] max-w-[400px] w-full outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 border-slate-300"
+                  className="text-sm font-medium text-foreground bg-transparent border rounded-md px-2 py-1 min-w-[180px] max-w-[400px] w-full outline-none focus:ring-2 focus:ring-[var(--blue-500)] focus:border-[var(--blue-500)] border-[var(--neutral-300)]"
                   placeholder={DEFAULT_WHITEBOARD_TITLE}
                   aria-label="Whiteboard title"
                 />
@@ -902,7 +915,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                 <button
                   type="button"
                   onClick={() => setIsEditingTitle(true)}
-                  className="text-sm font-medium text-foreground truncate text-left px-2 py-1 -ml-2 rounded-md hover:bg-slate-100 transition-colors"
+                  className="text-sm font-medium text-foreground truncate text-left px-2 py-1 -ml-2 rounded-md hover:bg-[var(--neutral-100)] transition-colors"
                 >
                   {whiteboardTitle || DEFAULT_WHITEBOARD_TITLE}
                 </button>
@@ -912,13 +925,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full shrink-0">{session.problem.topic}</span>
                   <span className="flex items-center gap-0.5 shrink-0">
                     {Array.from({ length: 5 }).map((_, i) => (
-                      <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < session.problem!.difficulty ? "bg-primary" : "bg-slate-200"}`} />
+                      <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < session.problem!.difficulty ? "bg-primary" : "bg-[var(--neutral-200)]"}`} />
                     ))}
                   </span>
                 </>
               )}
               {!session.isBlank && !session.problem && session.notebookProblem && (
-                <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded-full shrink-0 border border-slate-200">
+                <span className="px-2 py-0.5 bg-[var(--neutral-100)] text-[var(--neutral-600)] text-xs rounded-full shrink-0 border border-[var(--neutral-200)]">
                   Notebook Problem
                 </span>
               )}
@@ -930,7 +943,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
             </div>
             <div className="shrink-0">
               <Select value={normalizedStatus} onValueChange={(v) => handleStatusChange(v as SessionStatusKey)}>
-                <SelectTrigger size="sm" className="h-8 rounded-full px-3 border-slate-200 bg-white">
+                <SelectTrigger size="sm" className="h-8 rounded-full px-3 border-[var(--neutral-200)] bg-card">
                   <SelectValue>
                     <span className="flex items-center gap-2 text-xs">
                       <span className={`h-2 w-2 rounded-full ${SESSION_STATUS_COLORS[normalizedStatus]}`} />
@@ -955,7 +968,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
           {/* Toolbar + Canvas */}
           <div className="flex-1 flex flex-col min-h-0">
             {/* Toolbar */}
-            <div className="flex items-center gap-1 px-4 py-2 bg-white border-b border-slate-100">
+            <div className="flex items-center gap-1 px-4 py-2 bg-card border-b border-[var(--neutral-100)]">
               {toolbarItems.map((item) => (
                 <Button
                   key={item.tool}
@@ -981,16 +994,16 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   <ChevronDown className="size-3 opacity-60" />
                 </Button>
                 {showEraserDropdown && (
-                  <div className="absolute top-full left-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="absolute top-full left-0 mt-1.5 bg-card border border-[var(--neutral-200)] rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
                     <button
-                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "eraser" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-slate-50"}`}
+                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "eraser" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-[var(--neutral-50)]"}`}
                       onClick={() => { setTool("eraser"); setShowEraserDropdown(false); }}
                     >
                       <Eraser className="size-4" />
                       Eraser
                     </button>
                     <button
-                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "eraserPartial" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-slate-50"}`}
+                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "eraserPartial" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-[var(--neutral-50)]"}`}
                       onClick={() => { setTool("eraserPartial"); setShowEraserDropdown(false); }}
                     >
                       <Eraser className="size-4" />
@@ -1012,7 +1025,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   <ChevronDown className="size-3 opacity-60" />
                 </Button>
                 {showShapesDropdown && (
-                  <div className="absolute top-full left-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="absolute top-full left-0 mt-1.5 bg-card border border-[var(--neutral-200)] rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
                     {([
                       { tool: "line" as const, icon: Minus, label: "Line" },
                       { tool: "rectangle" as const, icon: Square, label: "Rectangle" },
@@ -1021,7 +1034,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     ] as const).map(({ tool: t, icon: Icon, label }) => (
                       <button
                         key={t}
-                        className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === t ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-slate-50"}`}
+                        className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === t ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-[var(--neutral-50)]"}`}
                         onClick={() => { setTool(t); setShowShapesDropdown(false); }}
                       >
                         <Icon className="size-4" />
@@ -1044,16 +1057,16 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                   <ChevronDown className="size-3 opacity-60" />
                 </Button>
                 {showSelectDropdown && (
-                  <div className="absolute top-full left-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="absolute top-full left-0 mt-1.5 bg-card border border-[var(--neutral-200)] rounded-xl shadow-lg py-1 z-50 w-44 animate-in fade-in slide-in-from-top-1 duration-150">
                     <button
-                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "lasso" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-slate-50"}`}
+                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "lasso" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-[var(--neutral-50)]"}`}
                       onClick={() => { setTool("lasso"); setShowSelectDropdown(false); }}
                     >
                       <Lasso className="size-4" />
                       Lasso Tool
                     </button>
                     <button
-                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "selectionBox" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-slate-50"}`}
+                      className={`flex items-center gap-2.5 w-full px-3 py-2 text-sm transition-colors ${tool === "selectionBox" ? "bg-primary/10 text-primary font-medium" : "text-foreground hover:bg-[var(--neutral-50)]"}`}
                       onClick={() => { setTool("selectionBox"); setShowSelectDropdown(false); }}
                     >
                       <BoxSelect className="size-4" />
@@ -1063,14 +1076,14 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                 )}
               </div>
 
-              <div className="w-px h-6 bg-slate-200 mx-1" />
+              <div className="w-px h-6 bg-[var(--neutral-200)] mx-1" />
               <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={history.undo} title="Undo" aria-label="Undo (Ctrl+Z)">
                 <Undo2 className="size-4" />
               </Button>
               <Button variant="outline" size="icon" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} onClick={history.redo} title="Redo" aria-label="Redo (Ctrl+Shift+Z)">
                 <Redo2 className="size-4" />
               </Button>
-              <div className="w-px h-6 bg-slate-200 mx-1" />
+              <div className="w-px h-6 bg-[var(--neutral-200)] mx-1" />
               <div className="flex items-center gap-2 mx-1">
                 <input
                   type="range"
@@ -1082,17 +1095,17 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                 />
                 <span className="text-xs text-muted-foreground w-3">{penWidth}</span>
               </div>
-              <div className="w-px h-6 bg-slate-200 mx-1" />
+              <div className="w-px h-6 bg-[var(--neutral-200)] mx-1" />
               <div className="flex items-center gap-1.5">
                 <input
                   type="color"
                   value={penColor}
                   onChange={(e) => setPenColor(e.target.value)}
-                  className="w-8 h-8 rounded-full border-2 border-slate-200 cursor-pointer bg-transparent [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full"
+                  className="w-8 h-8 rounded-full border-2 border-[var(--neutral-200)] cursor-pointer bg-transparent [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-full"
                   title="Pen color"
                 />
               </div>
-              <div className="w-px h-6 bg-slate-200 mx-1" />
+              <div className="w-px h-6 bg-[var(--neutral-200)] mx-1" />
               <Button
                 variant={showGrid ? "default" : "outline"}
                 size="icon"
@@ -1143,11 +1156,11 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
               <Button variant="outline" size="icon-sm" className={cn("rounded-full", TOOLBAR_BUTTON_HOVER)} title="Zoom Out" aria-label="Zoom out (toward cursor)" onClick={view.handleZoomOut}>
                 <ZoomOut className="size-3.5" />
               </Button>
-              <div className="w-px h-6 bg-slate-200 mx-1" />
+              <div className="w-px h-6 bg-[var(--neutral-200)] mx-1" />
               <Button
                 variant="outline"
                 size="icon"
-                className="rounded-full border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 transition-all duration-150 active:bg-red-100"
+                className="rounded-full border-[var(--red-200)] text-[var(--red-600)] hover:bg-[var(--red-50)] hover:border-[var(--red-300)] hover:text-[var(--red-700)] transition-all duration-150 active:bg-[var(--red-100)]"
                 onClick={handleClearClick}
                 title="Clear entire whiteboard"
                 aria-label="Clear entire whiteboard"
@@ -1159,7 +1172,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
             {/* Clear whiteboard confirmation dialog */}
             {showClearConfirmDialog && (
               <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+                className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-40)]"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="clear-dialog-title"
@@ -1167,7 +1180,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                 onClick={(e) => e.target === e.currentTarget && handleClearConfirmNo()}
               >
                 <div
-                  className="bg-white rounded-xl shadow-xl border border-slate-200 p-5 w-full max-w-sm mx-4"
+                  className="bg-card rounded-xl shadow-xl border border-[var(--neutral-200)] p-5 w-full max-w-sm mx-4"
                   onClick={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {
                     if (e.key === "Escape") { e.preventDefault(); handleClearConfirmNo(); }
@@ -1181,13 +1194,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                       type="checkbox"
                       checked={clearConfirmDontAskAgain}
                       onChange={(e) => setClearConfirmDontAskAgain(e.target.checked)}
-                      className="rounded border-slate-300"
+                      className="rounded border-[var(--neutral-300)]"
                     />
                     Don&apos;t ask me this again
                   </label>
                   <div className="flex justify-end gap-2">
                     <Button variant="outline" size="sm" onClick={handleClearConfirmNo}>No</Button>
-                    <Button variant="destructive" size="sm" onClick={handleClearConfirmYes} className="bg-red-600 hover:bg-red-700">Yes</Button>
+                    <Button variant="destructive" size="sm" onClick={handleClearConfirmYes} className="bg-[var(--red-600)] hover:bg-[var(--red-700)]">Yes</Button>
                   </div>
                 </div>
               </div>
@@ -1196,20 +1209,20 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
             {/* Graph editor dialog */}
             {isGraphDialogOpen && (
               <div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+                className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-40)]"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="graph-dialog-title"
                 onClick={(e) => e.target === e.currentTarget && closeGraphEditor()}
               >
                 <div
-                  className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-4xl h-[80vh] mx-4 flex flex-col"
+                  className="bg-card rounded-xl shadow-xl border border-[var(--neutral-200)] w-full max-w-4xl h-[80vh] mx-4 flex flex-col"
                   onClick={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {
                     if (e.key === "Escape") { e.preventDefault(); closeGraphEditor(); }
                   }}
                 >
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--neutral-200)]">
                     <h2 id="graph-dialog-title" className="text-base font-semibold text-foreground">Graph Editor</h2>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={closeGraphEditor}>Cancel</Button>
@@ -1242,11 +1255,11 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
 
             {/* Canvas area */}
             <div
-              className="flex-1 relative overflow-hidden bg-white"
+              className="flex-1 relative overflow-hidden bg-card"
               style={
                 showGrid && view.constantGridSize
                   ? {
-                      backgroundImage: `linear-gradient(to right, ${GRID_COLOR} 1px, transparent 1px), linear-gradient(to bottom, ${GRID_COLOR} 1px, transparent 1px)`,
+                      backgroundImage: "linear-gradient(to right, var(--canvas-grid) 1px, var(--transparent) 1px), linear-gradient(to bottom, var(--canvas-grid) 1px, var(--transparent) 1px)",
                       backgroundSize: `${STATIC_GRID_SIZE_PX}px ${STATIC_GRID_SIZE_PX}px`,
                       backgroundPosition: `${view.pan.x}px ${view.pan.y}px`,
                     }
@@ -1254,7 +1267,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
               }
             >
               {persistence.isLoadingSnapshot && (
-                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50">
+                <div className="absolute inset-0 bg-[var(--surface-glass-80)] backdrop-blur-sm flex items-center justify-center z-50">
                   <div className="flex flex-col items-center gap-3">
                     <Loader2 className="size-6 text-primary animate-spin" />
                     <p className="text-sm text-muted-foreground">Loading whiteboard...</p>
@@ -1262,13 +1275,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                 </div>
               )}
               {persistence.isSavingSnapshot && !persistence.isLoadingSnapshot && (
-                <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-sm border border-slate-200 rounded-lg px-3 py-2 shadow-sm z-40 flex items-center gap-2">
+                <div className="absolute bottom-4 right-4 bg-[var(--surface-glass-90)] backdrop-blur-sm border border-[var(--neutral-200)] rounded-lg px-3 py-2 shadow-sm z-40 flex items-center gap-2">
                   <Loader2 className="size-3.5 text-primary animate-spin" />
                   <span className="text-xs text-muted-foreground">Saving...</span>
                 </div>
               )}
               {(session.problem || session.notebookProblem || session.isBlank) && (
-                <div className="absolute top-4 left-4 bg-white/85 backdrop-blur-sm border border-slate-200 rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs">
+                <div className="absolute top-4 left-4 bg-[var(--surface-glass-85)] backdrop-blur-sm border border-[var(--neutral-200)] rounded-xl px-4 py-3 shadow-sm z-10 max-w-xs">
                   <div className="relative mb-2 min-w-[120px]">
                     <p className="text-xs text-muted-foreground text-center">Problem</p>
                     <button
@@ -1397,7 +1410,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                       }
                     }}
                   >
-                    <div className={cn("p-1 rounded border-2 border-dashed transition-[border-color] duration-200", showOutline ? "border-blue-400/50" : "border-transparent")}>
+                    <div className={cn("p-1 rounded border-2 border-dashed transition-[border-color] duration-200", showOutline ? "border-[var(--blue-400-50)]" : "border-transparent")}>
                       <div
                         ref={(el) => {
                           if (el) text.textItemInnerRefs.current.set(t.id, el);
@@ -1430,7 +1443,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     key={img.id}
                     className={cn(
                       "absolute z-20 transition-[box-shadow]",
-                      showOutline && "ring-2 ring-dashed ring-blue-400 ring-offset-1",
+                      showOutline && "ring-2 ring-dashed ring-[var(--blue-400)] ring-offset-1",
                       images.resizingImageId === img.id ? "cursor-nwse-resize" : "cursor-grab active:cursor-grabbing",
                     )}
                     style={{
@@ -1449,13 +1462,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     <img
                       src={img.dataUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}
                       alt=""
-                      className="w-full h-full object-contain pointer-events-none select-none bg-slate-100/50"
+                      className="w-full h-full object-contain pointer-events-none select-none bg-[var(--neutral-100-50)]"
                       draggable={false}
                     />
                     {isSelected && (
                       <button
                         type="button"
-                        className="absolute -top-1 -left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-red-500 text-white shadow-md hover:bg-red-600 active:bg-red-700 transition-colors"
+                        className="absolute -top-1 -left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-[var(--red-500)] text-primary-foreground shadow-md hover:bg-[var(--red-600)] active:bg-[var(--red-700)] transition-colors"
                         title="Delete image"
                         aria-label="Delete image"
                         onMouseDown={(e) => {
@@ -1471,7 +1484,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     )}
                     {isSelected && (
                       <div
-                        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize border-l-2 border-t-2 border-slate-400/80 bg-white/50 rounded-tl"
+                        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize border-l-2 border-t-2 border-[var(--neutral-400-80)] bg-[var(--surface-glass-50)] rounded-tl"
                         style={{ touchAction: "none" }}
                         title="Resize (hold Shift for free-form)"
                         aria-label="Resize image; hold Shift for free-form"
@@ -1491,7 +1504,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     key={graph.id}
                     className={cn(
                       "absolute z-20 transition-[box-shadow]",
-                      showOutline && "ring-2 ring-dashed ring-blue-400 ring-offset-1",
+                      showOutline && "ring-2 ring-dashed ring-[var(--blue-400)] ring-offset-1",
                       graphs.resizingGraphId === graph.id ? "cursor-nwse-resize" : "cursor-grab active:cursor-grabbing",
                     )}
                     style={{
@@ -1515,13 +1528,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     <img
                       src={graph.thumbnailDataUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}
                       alt=""
-                      className="w-full h-full object-contain pointer-events-none select-none bg-white border border-slate-300"
+                      className="w-full h-full object-contain pointer-events-none select-none bg-card border border-[var(--neutral-300)]"
                       draggable={false}
                     />
                     {isSelected && (
                       <button
                         type="button"
-                        className="absolute -top-1 -left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-red-500 text-white shadow-md hover:bg-red-600 active:bg-red-700 transition-colors"
+                        className="absolute -top-1 -left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full bg-[var(--red-500)] text-primary-foreground shadow-md hover:bg-[var(--red-600)] active:bg-[var(--red-700)] transition-colors"
                         title="Delete graph"
                         aria-label="Delete graph"
                         onMouseDown={(e) => {
@@ -1537,7 +1550,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     )}
                     {isSelected && (
                       <div
-                        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize border-l-2 border-t-2 border-slate-400/80 bg-white/50 rounded-tl"
+                        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize border-l-2 border-t-2 border-[var(--neutral-400-80)] bg-[var(--surface-glass-50)] rounded-tl"
                         style={{ touchAction: "none" }}
                         title="Resize"
                         aria-label="Resize graph"
@@ -1603,13 +1616,13 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
           role="separator"
           aria-orientation="vertical"
           onMouseDown={(e) => { if (e.button !== 0) return; e.preventDefault(); setIsResizing(true); }}
-          className="w-1.5 shrink-0 cursor-col-resize bg-slate-200 hover:bg-primary/30 active:bg-primary/50 transition-colors flex-shrink-0"
+          className="w-1.5 shrink-0 cursor-col-resize bg-[var(--neutral-200)] hover:bg-primary/30 active:bg-primary/50 transition-colors flex-shrink-0"
         />
 
         {/* Right: Tutor Panel */}
         <div
           style={{ width: `${sidebarWidth}%` }}
-          className="h-full flex flex-col bg-slate-50 border-l border-slate-200 shrink-0 min-w-0"
+          className="h-full flex flex-col bg-[var(--neutral-50)] border-l border-[var(--neutral-200)] shrink-0 min-w-0"
         >
           <Tabs defaultValue="feedback" className="flex-1 flex flex-col min-h-0">
             <div className="px-4 pt-3 pb-0">
@@ -1657,7 +1670,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
                               <span className="text-xs font-medium text-foreground">Step {step.id}</span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${step.status === "correct" ? "bg-green-50 text-green-700" : step.status === "incorrect" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700"}`}>
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${step.status === "correct" ? "bg-[var(--green-50)] text-[var(--green-700)]" : step.status === "incorrect" ? "bg-[var(--red-50)] text-[var(--red-700)]" : "bg-[var(--yellow-50)] text-[var(--yellow-700)]"}`}>
                                 {step.verdict}
                               </span>
                             </div>
@@ -1685,25 +1698,25 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
               <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
                 {chat.chatMessages.map((msg) => (
                   <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] px-3.5 py-2.5 text-sm rounded-2xl ${msg.role === "user" ? "bg-primary text-white rounded-br-md" : "bg-white border border-slate-200 text-foreground rounded-bl-md"}`}>
+                    <div className={`max-w-[85%] px-3.5 py-2.5 text-sm rounded-2xl ${msg.role === "user" ? "bg-primary text-primary-foreground rounded-br-md" : "bg-card border border-[var(--neutral-200)] text-foreground rounded-bl-md"}`}>
                       {msg.content}
                     </div>
                   </div>
                 ))}
                 {chat.isChatLoading && (
                   <div className="flex justify-start">
-                    <div className="bg-white border border-slate-200 text-foreground rounded-2xl rounded-bl-md px-3.5 py-2.5">
+                    <div className="bg-card border border-[var(--neutral-200)] text-foreground rounded-2xl rounded-bl-md px-3.5 py-2.5">
                       <div className="flex gap-1">
-                        <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
-                        <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.15s]" />
-                        <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.3s]" />
+                        <span className="w-1.5 h-1.5 bg-[var(--neutral-300)] rounded-full animate-bounce" />
+                        <span className="w-1.5 h-1.5 bg-[var(--neutral-300)] rounded-full animate-bounce [animation-delay:0.15s]" />
+                        <span className="w-1.5 h-1.5 bg-[var(--neutral-300)] rounded-full animate-bounce [animation-delay:0.3s]" />
                       </div>
                     </div>
                   </div>
                 )}
                 <div ref={chat.chatEndRef} />
               </div>
-              <div className="border-t border-slate-200 p-3">
+              <div className="border-t border-[var(--neutral-200)] p-3">
                 <div className="flex items-end gap-2">
                   <textarea
                     ref={chatInputRef}
@@ -1718,7 +1731,7 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
                     }}
                     placeholder="Ask the tutor..."
                     rows={1}
-                    className="flex-1 min-w-0 resize-none bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition whitespace-pre-wrap break-words overflow-x-hidden"
+                    className="flex-1 min-w-0 resize-none bg-card border border-[var(--neutral-200)] rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition whitespace-pre-wrap break-words overflow-x-hidden"
                     style={{ maxHeight: "30vh", overflowY: "auto" }}
                     aria-label="Ask the tutor"
                   />

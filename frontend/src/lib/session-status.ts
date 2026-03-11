@@ -12,10 +12,10 @@ export const SESSION_STATUS_LABELS: Record<SessionStatusKey, string> = {
 };
 
 export const SESSION_STATUS_COLORS: Record<SessionStatusKey, string> = {
-  not_started: "bg-slate-500",
-  in_progress: "bg-amber-400",
-  completed: "bg-green-500",
-  needs_review: "bg-rose-500",
+  not_started: "bg-[var(--status-not-started)]",
+  in_progress: "bg-[var(--status-in-progress)]",
+  completed: "bg-[var(--status-completed)]",
+  needs_review: "bg-[var(--status-needs-review)]",
 };
 
 export function normalizeSessionStatus(status?: string | null): SessionStatusKey {

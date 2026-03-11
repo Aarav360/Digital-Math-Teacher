@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUserId, DbSession
@@ -61,13 +62,14 @@ async def send_chat_message(body: ChatSendRequest, user_id: CurrentUserId, db: D
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    usage_result = await db.execute(select(UserUsageCounter).where(UserUsageCounter.user_id == user_id))
-    usage = usage_result.scalar_one_or_none()
-    if usage is None:
-        usage = UserUsageCounter(user_id=user_id, chat_messages=1)
-        db.add(usage)
-    else:
-        usage.chat_messages += 1
+    await db.execute(
+        insert(UserUsageCounter)
+        .values(user_id=user_id, chat_messages=1)
+        .on_conflict_do_update(
+            index_elements=[UserUsageCounter.user_id],
+            set_={"chat_messages": UserUsageCounter.chat_messages + 1},
+        )
+    )
     return StreamingResponse(
         _stream_stub(body.session_id, body.message, db),
         media_type="text/event-stream",

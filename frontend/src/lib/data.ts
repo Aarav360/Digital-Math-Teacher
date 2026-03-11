@@ -24,15 +24,18 @@ export type Template = {
   description: string;
   icon: string;
   color: string;
+  borderColor: string;
+  surfaceColor: string;
+  surfaceColorSoft: string;
 };
 
 export const TEMPLATES: Template[] = [
-  { id: "t1", title: "Blank Whiteboard", topic: "Any", description: "Start from scratch with a clean slate", icon: "plus", color: "#e5e5ea" },
-  { id: "t2", title: "Algebra", topic: "Algebra 1", description: "Equations, factoring, and simplification", icon: "variable", color: "#2A7BD4" },
-  { id: "t3", title: "Calculus", topic: "Calc 1", description: "Derivatives, integrals, and limits", icon: "trending-up", color: "#34c759" },
-  { id: "t4", title: "Trigonometry", topic: "Trig", description: "Identities, proofs, and unit circle", icon: "triangle", color: "#ff9500" },
-  { id: "t5", title: "Linear Algebra", topic: "Linear Algebra", description: "Matrices, eigenvalues, and vectors", icon: "grid-3x3", color: "#af52de" },
-  { id: "t6", title: "Word Problems", topic: "Any", description: "Apply math to real-world scenarios", icon: "file-text", color: "#ff2d55" },
+  { id: "t1", title: "Blank Whiteboard", topic: "Any", description: "Start from scratch with a clean slate", icon: "plus", color: "var(--template-blank)", borderColor: "var(--template-blank-border)", surfaceColor: "var(--template-blank-surface)", surfaceColorSoft: "var(--template-blank-surface)" },
+  { id: "t2", title: "Algebra", topic: "Algebra 1", description: "Equations, factoring, and simplification", icon: "variable", color: "var(--template-algebra)", borderColor: "var(--template-algebra-border)", surfaceColor: "var(--template-algebra-surface)", surfaceColorSoft: "var(--template-algebra-surface-soft)" },
+  { id: "t3", title: "Calculus", topic: "Calc 1", description: "Derivatives, integrals, and limits", icon: "trending-up", color: "var(--template-calc)", borderColor: "var(--template-calc-border)", surfaceColor: "var(--template-calc-surface)", surfaceColorSoft: "var(--template-calc-surface-soft)" },
+  { id: "t4", title: "Trigonometry", topic: "Trig", description: "Identities, proofs, and unit circle", icon: "triangle", color: "var(--template-trig)", borderColor: "var(--template-trig-border)", surfaceColor: "var(--template-trig-surface)", surfaceColorSoft: "var(--template-trig-surface-soft)" },
+  { id: "t5", title: "Linear Algebra", topic: "Linear Algebra", description: "Matrices, eigenvalues, and vectors", icon: "grid-3x3", color: "var(--template-linear)", borderColor: "var(--template-linear-border)", surfaceColor: "var(--template-linear-surface)", surfaceColorSoft: "var(--template-linear-surface-soft)" },
+  { id: "t6", title: "Word Problems", topic: "Any", description: "Apply math to real-world scenarios", icon: "file-text", color: "var(--template-word)", borderColor: "var(--template-word-border)", surfaceColor: "var(--template-word-surface)", surfaceColorSoft: "var(--template-word-surface-soft)" },
 ];
 
 export const MOCK_FEEDBACK: StepFeedback[] = [
