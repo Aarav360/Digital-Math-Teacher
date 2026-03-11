@@ -111,9 +111,11 @@
   --yellow-50-50: rgba(254, 252, 232, 0.5);
   --surface-glass-50: rgba(255, 255, 255, 0.5);
   --surface-glass-60: rgba(255, 255, 255, 0.6);
+  --surface-glass-70: rgba(255, 255, 255, 0.7);
   --surface-glass-80: rgba(255, 255, 255, 0.8);
   --surface-glass-85: rgba(255, 255, 255, 0.85);
   --surface-glass-90: rgba(255, 255, 255, 0.9);
+  --surface-glass-95: rgba(255, 255, 255, 0.95);
   --border-glass: rgba(255, 255, 255, 0.2);
   --overlay-40: rgba(0, 0, 0, 0.4);
   --overlay-50: rgba(0, 0, 0, 0.5);
@@ -298,9 +300,11 @@
   --yellow-50-50: rgba(43, 35, 6, 0.5);
   --surface-glass-50: rgba(17, 19, 24, 0.5);
   --surface-glass-60: rgba(17, 19, 24, 0.6);
+  --surface-glass-70: rgba(17, 19, 24, 0.7);
   --surface-glass-80: rgba(17, 19, 24, 0.8);
   --surface-glass-85: rgba(17, 19, 24, 0.85);
   --surface-glass-90: rgba(17, 19, 24, 0.9);
+  --surface-glass-95: rgba(17, 19, 24, 0.95);
   --border-glass: rgba(255, 255, 255, 0.12);
   --overlay-40: rgba(0, 0, 0, 0.6);
   --overlay-50: rgba(0, 0, 0, 0.7);
@@ -532,6 +536,45 @@
 /* Hide Next.js error overlay portal */
 nextjs-portal {
   display: none !important;
+}
+
+/* ── Landing Nav Glass ── */
+
+.landing-nav {
+  background: transparent;
+  transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease, backdrop-filter 0.25s ease;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.landing-nav > * {
+  position: relative;
+  z-index: 1;
+}
+
+.landing-nav::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  background-color: var(--surface-glass-60);
+  background: linear-gradient(
+    90deg,
+    var(--surface-glass-80),
+    var(--surface-glass-70),
+    var(--surface-glass-50)
+  );
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-bottom: 1px solid var(--border-glass);
+  box-shadow: 0 10px 30px var(--neutral-400-80);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.landing-nav-scrolled::before {
+  opacity: 1;
 }
 
 /* ── Nav Pill Animation ── */

@@ -11,7 +11,6 @@ from app.models.notebook import Notebook
 from app.models.problem import Problem
 from app.models.step import Step, StepEvaluation
 from app.models.canvas_snapshot import CanvasSnapshot
-from app.models.step import Step
 from app.models.chat_message import ChatMessage
 from app.schemas.session import SessionCreate, SessionUpdate, SessionRead, SessionWithProblem, SessionListEntry
 from app.schemas.canvas import SnapshotUpdate, SnapshotResponse
@@ -198,6 +197,11 @@ async def delete_session(session_id: str, user_id: CurrentUserId, db: DbSession)
             detail="Cannot delete a notebook-linked session",
         )
     await db.execute(delete(CanvasSnapshot).where(CanvasSnapshot.session_id == session_id))
+    await db.execute(
+        delete(StepEvaluation).where(
+            StepEvaluation.step_id.in_(select(Step.id).where(Step.session_id == session_id))
+        )
+    )
     await db.execute(delete(Step).where(Step.session_id == session_id))
     await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
     await db.delete(session)

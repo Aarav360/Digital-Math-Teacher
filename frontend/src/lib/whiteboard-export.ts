@@ -148,9 +148,10 @@ export async function downloadSnapshotAsPng(
 
   for (const stroke of strokes) {
     if (stroke.points.length < 2) continue;
+    const eraserColor = canvasBg || inkDefault || getCssVar("--background");
     ctx.strokeStyle =
       stroke.tool === "eraser" || stroke.tool === "eraserPartial"
-        ? canvasBg || inkDefault
+        ? eraserColor || resolveColor(stroke.color)
         : resolveColor(stroke.color);
     ctx.lineWidth =
       stroke.tool === "eraser"

@@ -429,6 +429,9 @@ export default function DashboardPage() {
   const [deleteTarget, setDeleteTarget] = useState<SessionListEntry | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameDialogRef = useRef<HTMLDivElement>(null);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const lastRenameFocusRef = useRef<HTMLElement | null>(null);
 
   const getSessionTitle = useCallback(
     (session: SessionListEntry) => session.title ?? session.problem_title ?? "Untitled Whiteboard",
@@ -506,6 +509,7 @@ export default function DashboardPage() {
   }, [isCreatingBlank, router]);
 
   const handleRename = useCallback((session: SessionListEntry) => {
+    lastRenameFocusRef.current = document.activeElement as HTMLElement | null;
     setRenameTarget(session);
   }, []);
 
@@ -513,21 +517,29 @@ export default function DashboardPage() {
     if (!renameTarget || isRenaming) return;
     const trimmed = renameValue.trim() || "Untitled Whiteboard";
     setIsRenaming(true);
-    const res = await updateSessionTitle(renameTarget.id, trimmed);
-    if (res.ok) {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === renameTarget.id ? { ...s, title: trimmed } : s)),
-      );
-      setRenameTarget(null);
-    } else {
-      toast.error(res.error || "Failed to rename whiteboard");
+    try {
+      const res = await updateSessionTitle(renameTarget.id, trimmed);
+      if (res.ok) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === renameTarget.id ? { ...s, title: trimmed } : s)),
+        );
+        setRenameTarget(null);
+        lastRenameFocusRef.current?.focus?.();
+      } else {
+        toast.error(res.error || "Failed to rename whiteboard");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to rename whiteboard";
+      toast.error(message);
+    } finally {
+      setIsRenaming(false);
     }
-    setIsRenaming(false);
   }, [renameTarget, renameValue, isRenaming]);
 
   const handleRenameCancel = useCallback(() => {
     if (isRenaming) return;
     setRenameTarget(null);
+    lastRenameFocusRef.current?.focus?.();
   }, [isRenaming]);
 
   const handleDelete = useCallback((session: SessionListEntry) => {
@@ -537,15 +549,21 @@ export default function DashboardPage() {
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget || isDeleting) return;
     setIsDeleting(true);
-    const res = await deleteSession(deleteTarget.id);
-    if (res.ok) {
-      setSessions((prev) => prev.filter((s) => s.id !== deleteTarget.id));
-      setDeleteTarget(null);
-      toast.success("Whiteboard deleted");
-    } else {
-      toast.error(res.error || "Failed to delete whiteboard");
+    try {
+      const res = await deleteSession(deleteTarget.id);
+      if (res.ok) {
+        setSessions((prev) => prev.filter((s) => s.id !== deleteTarget.id));
+        setDeleteTarget(null);
+        toast.success("Whiteboard deleted");
+      } else {
+        toast.error(res.error || "Failed to delete whiteboard");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete whiteboard";
+      toast.error(message);
+    } finally {
+      setIsDeleting(false);
     }
-    setIsDeleting(false);
   }, [deleteTarget, isDeleting]);
 
   const handleDeleteCancel = useCallback(() => {
@@ -819,18 +837,41 @@ export default function DashboardPage() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="rename-dialog-title"
+          aria-describedby="rename-dialog-desc"
           onClick={(e) => e.target === e.currentTarget && handleRenameCancel()}
         >
           <div
             className="bg-card rounded-2xl shadow-xl border border-[var(--neutral-200)] p-5 w-full max-w-md mx-4"
+            ref={renameDialogRef}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === "Escape") { e.preventDefault(); handleRenameCancel(); }
               else if (e.key === "Enter") { e.preventDefault(); handleRenameConfirm(); }
+              else if (e.key === "Tab") {
+                const container = renameDialogRef.current;
+                if (!container) return;
+                const focusables = Array.from(
+                  container.querySelectorAll<HTMLElement>(
+                    "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+                  ),
+                ).filter((el) => !el.hasAttribute("disabled"));
+                if (focusables.length === 0) return;
+                const first = focusables[0];
+                const last = focusables[focusables.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                  e.preventDefault();
+                  last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                  e.preventDefault();
+                  first.focus();
+                }
+              }
             }}
           >
             <h2 id="rename-dialog-title" className="text-base font-semibold text-foreground mb-1">Rename</h2>
-            <p className="text-sm text-muted-foreground mb-4">Please enter a new name for the item:</p>
+            <p id="rename-dialog-desc" className="text-sm text-muted-foreground mb-4">
+              Please enter a new name for the item:
+            </p>
             <Input
               ref={renameInputRef}
               value={renameValue}
@@ -862,7 +903,10 @@ export default function DashboardPage() {
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === "Escape") { e.preventDefault(); handleDeleteCancel(); }
-              else if (e.key === "Enter") { e.preventDefault(); handleDeleteConfirm(); }
+              else if (e.key === "Enter" && document.activeElement === deleteButtonRef.current) {
+                e.preventDefault();
+                handleDeleteConfirm();
+              }
             }}
           >
             <h2 id="delete-dialog-title" className="text-base font-semibold text-foreground mb-1">Delete whiteboard?</h2>
@@ -873,7 +917,13 @@ export default function DashboardPage() {
               <Button variant="outline" size="sm" onClick={handleDeleteCancel} disabled={isDeleting}>
                 Cancel
               </Button>
-              <Button variant="destructive" size="sm" onClick={handleDeleteConfirm} disabled={isDeleting}>
+              <Button
+                ref={deleteButtonRef}
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteConfirm}
+                disabled={isDeleting}
+              >
                 {isDeleting ? "Deleting..." : "Delete"}
               </Button>
             </div>

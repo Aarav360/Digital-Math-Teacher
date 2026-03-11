@@ -91,6 +91,8 @@ export const MathLiveField = forwardRef<MathfieldElement, MathLiveFieldProps>(
       field.setAttribute("data-multiline", multiline ? "true" : "false");
       if (placeholder) {
         field.setAttribute("placeholder", formatPlaceholder(placeholder, multiline));
+      } else {
+        field.removeAttribute("placeholder");
       }
     }, [readOnly, placeholder, multiline]);
 

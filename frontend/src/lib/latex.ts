@@ -10,8 +10,15 @@ const stripMathDelimiters = (value: string) =>
 const escapeLatexText = (value: string) =>
   value
     .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/#/g, "\\#")
+    .replace(/&/g, "\\&")
+    .replace(/\$/g, "\\$")
+    .replace(/_/g, "\\_")
     .replace(/{/g, "\\{")
-    .replace(/}/g, "\\}");
+    .replace(/}/g, "\\}")
+    .replace(/\^/g, "\\textasciicircum ")
+    .replace(/~/g, "\\textasciitilde ");
 
 const looksLikeLatex = (value: string) =>
   LATEX_COMMAND_RE.test(value) || LATEX_SPECIAL_RE.test(value);

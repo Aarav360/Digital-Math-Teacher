@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import Plasma from "@/components/plasma";
 import ShinyText from "@/components/ShinyText";
 
 export default function LandingPage() {
   const revealRefs = useRef<HTMLDivElement[]>([]);
+  const [navScrolled, setNavScrolled] = useState(false);
 
   const handleSmoothScroll = useCallback((e: React.MouseEvent<HTMLAnchorElement>, targetId: string) => {
     e.preventDefault();
@@ -29,6 +30,15 @@ export default function LandingPage() {
     );
     revealRefs.current.forEach((el) => el && observer.observe(el));
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setNavScrolled(window.scrollY > 48);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   const addRevealRef = (el: HTMLDivElement | null) => {
@@ -61,7 +71,7 @@ export default function LandingPage() {
       <div className="landing-orb landing-orb-3" />
 
       {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-40 landing-nav">
+      <nav className={`fixed top-0 left-0 right-0 z-40 landing-nav${navScrolled ? " landing-nav-scrolled" : ""}`}>
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[var(--blue-600)] to-[var(--indigo-600)] flex items-center justify-center shadow-sm">
