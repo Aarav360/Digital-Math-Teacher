@@ -25,7 +25,7 @@ Digital Math Teacher/
    cd backend
    cp .env.example .env
    # Edit .env: set DATABASE_URL and SECRET_KEY (see Backend setup below)
-   pip install -r requirements.txt
+   python3 -m pip install -r requirements.txt
    alembic upgrade head
    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
@@ -35,12 +35,13 @@ Digital Math Teacher/
 2. **Frontend** (in another terminal):
    ```bash
    cd frontend
+   cp .env.local.example .env.local
    pnpm install   # or npm install
    pnpm dev       # or npm run dev
    ```
    App: http://localhost:3000
 
-The frontend is configured to call the backend at `http://localhost:8000` (CORS allows `localhost:3000`).
+The frontend calls the backend via `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`). CORS allows `localhost:3000`.
 
 ---
 
@@ -52,6 +53,15 @@ The frontend is configured to call the backend at `http://localhost:8000` (CORS 
   - `SECRET_KEY`: e.g. `openssl rand -hex 32` for production.
 - **Migrations:** `cd backend && alembic upgrade head`
 - **Run:** `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+
+### Optional auth configuration (Google OAuth)
+
+The backend supports Google OAuth login in addition to guest tokens. Configure in `backend/.env`:
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI` (must point to `GET /api/v1/auth/google/callback`)
+- `FRONTEND_BASE_URL` (defaults to `http://localhost:3000`)
 
 ### Database migrations
 
@@ -66,6 +76,8 @@ The frontend is configured to call the backend at `http://localhost:8000` (CORS 
 - **Guest token:** `POST /api/v1/auth/guest` → returns `access_token` (no auth header).
 - **Authenticated requests:** `Authorization: Bearer <access_token>`.
 - **Current user:** `GET /api/v1/auth/me`.
+- **User settings:** `GET /api/v1/auth/settings`, `PUT /api/v1/auth/settings`.
+- **Google OAuth:** `POST /api/v1/auth/google/start` → (browser) `GET /api/v1/auth/google/callback` → `POST /api/v1/auth/google/finish`.
 
 ### API endpoints (all under `/api/v1`)
 
@@ -74,19 +86,42 @@ The frontend is configured to call the backend at `http://localhost:8000` (CORS 
 | GET | /health | No | Health check |
 | POST | /auth/guest | No | Create guest user and token |
 | GET | /auth/me | Yes | Current user profile |
+| GET | /auth/settings | Yes | Get user settings |
+| PUT | /auth/settings | Yes | Update user settings |
+| POST | /auth/google/start | No | Start Google OAuth (returns auth URL) |
+| GET | /auth/google/callback | No | Google OAuth callback (redirects to frontend) |
+| POST | /auth/google/finish | No | Exchange login code for JWT |
 | GET | /problems | No | List problems (topic, difficulty, type, search) |
 | GET | /problems/{id} | No | Get one problem |
 | POST | /sessions | Yes | Create session (`problem_id` optional — omit or null for blank whiteboard) |
 | GET | /sessions | Yes | List sessions (sort: recent, name, topic); blank sessions included via LEFT JOIN |
 | GET | /sessions/{id} | Yes | Get session with embedded problem (problem may be null for blank sessions) |
 | PATCH | /sessions/{id} | Yes | Update session status and/or title |
+| DELETE | /sessions/{id} | Yes | Delete session (and related data) |
 | PUT | /sessions/{id}/snapshot | Yes | Save canvas snapshot (strokes_json, width, height) |
 | GET | /sessions/{id}/snapshot | Yes | Get latest canvas snapshot for a session |
 | POST | /analysis/steps | Yes | Analyze steps (session_id, optional snapshot_id) |
 | POST | /chat | Yes | Send message (SSE stream) |
 | GET | /chat/{session_id} | Yes | Chat history |
+| GET | /notebooks | Yes | List notebooks |
+| POST | /notebooks | Yes | Create notebook (optionally with initial problems) |
+| GET | /notebooks/{id} | Yes | Get notebook with problems |
+| PATCH | /notebooks/{id} | Yes | Update notebook title / overall prompt |
+| POST | /notebooks/{id}/problems | Yes | Add problems to notebook |
+| PATCH | /notebooks/problems/{problem_id} | Yes | Update notebook problem |
+| DELETE | /notebooks/problems/{problem_id} | Yes | Delete notebook problem |
+| PATCH | /notebooks/{id}/problems/reorder | Yes | Reorder notebook problems |
 
-Step analysis and chat currently use stub implementations (no real OCR/SymPy/LLM). Seed problems via the API or by inserting directly into the `problems` table.
+Step analysis and chat are stubbed (no real OCR/SymPy/LLM), but the endpoints and persistence are wired.
+
+### Seeding sample problems
+
+On backend startup, sample problems are inserted if missing. You can also run:
+
+```bash
+cd backend
+python3 seed_problems.py
+```
 
 ---
 
@@ -98,6 +133,13 @@ Step analysis and chat currently use stub implementations (no real OCR/SymPy/LLM
 - **Lint:** `pnpm lint`
 
 Next.js 15 App Router app with TypeScript, Tailwind CSS, Radix UI, and `sonner` for toasts.
+
+### Frontend environment variables
+
+Set these in `frontend/.env.local`:
+
+- `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`)
+- `NEXT_PUBLIC_DESMOS_API_KEY` (optional; required to use the graph editor in a session)
 
 ---
 
@@ -125,7 +167,7 @@ The session whiteboard supports pen, highlighter, eraser, shapes (line, rectangl
 ## Remaining work
 
 - **Real "Check my steps"** — Send canvas snapshot to the backend, call the analysis API, and show real step feedback (OCR/LaTeX + comparison) instead of mock data.
-- **Real chat** — Wire chat to the backend (SSE streaming), load chat history from the API, and use a real LLM for tutor responses.
+- **Real chat** — Wire the frontend chat UI to the existing backend SSE endpoint, load chat history from the API, and use a real LLM for tutor responses.
 - **Loading and error handling** — Comprehensive loading states and user-facing errors (401, 404, 5xx) for all API calls; retry where appropriate.
 
 ---
