@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { ChatMessage } from "@/lib/data";
+import { gradingChat } from "@/lib/api";
 
-export function useChat() {
+export function useChat(sessionId: string) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: "1",
@@ -16,7 +17,6 @@ export function useChat() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
   const scrollTimeout1Ref = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const delayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollTimeout2Ref = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -46,18 +46,24 @@ export function useChat() {
 
     try {
       setIsChatLoading(true);
-      await new Promise<void>((resolve) => {
-        delayTimeoutRef.current = setTimeout(resolve, 1500);
+
+      const result = await gradingChat({
+        session_id: sessionId,
+        message: userMsg.content,
       });
+
       if (!mountedRef.current) return;
+
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content:
-          "That's a great question! Looking at your work, I can see you're on the right track. Remember to double-check your signs when dividing both sides of the equation. Would you like me to walk through that step in more detail?",
+        content: result.ok
+          ? result.data.reply
+          : result.error || "Sorry, something went wrong. Please try again.",
         timestamp: new Date().toISOString(),
       };
       setChatMessages((prev) => [...prev, assistantMsg]);
+
       if (scrollTimeout2Ref.current) clearTimeout(scrollTimeout2Ref.current);
       scrollTimeout2Ref.current = setTimeout(() => {
         if (mountedRef.current) chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -65,7 +71,7 @@ export function useChat() {
     } finally {
       if (mountedRef.current) setIsChatLoading(false);
     }
-  }, [chatInput]);
+  }, [chatInput, sessionId]);
 
   return {
     chatMessages,

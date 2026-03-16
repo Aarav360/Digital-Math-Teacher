@@ -383,3 +383,57 @@ export async function getProblems(
 export async function getProblem(id: string): Promise<ApiResponse<ProblemRead>> {
   return apiFetch(`/api/v1/problems/${id}`);
 }
+
+// ── Analysis / Grading ─────────────────────────────────────────────────────
+
+export type StepEvaluationRead = {
+  id: string;
+  step_id: string;
+  status: string;
+  verdict: string;
+  explanation: string;
+  suggestion: string | null;
+  created_at: string;
+};
+
+export type StepRead = {
+  id: string;
+  session_id: string;
+  step_index: number;
+  latex_raw: string | null;
+  evaluation: StepEvaluationRead | null;
+  created_at: string;
+};
+
+export type AnalysisResponse = {
+  steps: StepRead[];
+  summary: string | null;
+};
+
+export type GradingChatResponse = {
+  reply: string;
+  has_more_questions: boolean;
+};
+
+/** POST /api/v1/analysis/steps — run grading pipeline on session canvas. */
+export async function analyzeSteps(payload: {
+  session_id: string;
+  snapshot_id?: string;
+  image_base64?: string;
+}): Promise<ApiResponse<AnalysisResponse>> {
+  return apiFetch("/api/v1/analysis/steps", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** POST /api/v1/analysis/chat — follow-up chat after grading. */
+export async function gradingChat(payload: {
+  session_id: string;
+  message: string;
+}): Promise<ApiResponse<GradingChatResponse>> {
+  return apiFetch("/api/v1/analysis/chat", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}

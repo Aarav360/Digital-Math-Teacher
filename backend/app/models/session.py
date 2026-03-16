@@ -8,6 +8,8 @@ from app.models.base import Base, TimestampMixin
 class SessionStatus(str, enum.Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
+    EVALUATING = "evaluating"
+    FEEDBACK_READY = "feedback_ready"
     COMPLETED = "completed"
     NEEDS_REVIEW = "needs_review"
 

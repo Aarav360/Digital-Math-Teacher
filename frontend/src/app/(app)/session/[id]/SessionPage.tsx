@@ -145,12 +145,22 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
   const images = useImageLayer({ content, view, history, redraw, canvasSizeRef: persistence.canvasSizeRef });
   const graphs = useGraphLayer({ content, view, history, redraw });
   const selection = useSelection({ content, view, history });
+
+  // Ref-based indirection: useFeedback is called before useCanvasDrawing, so
+  // we wire the export function via a ref that gets assigned after canvas init.
+  const exportCanvasRef = useRef<(() => Promise<string | null>) | null>(null);
+  const exportCanvasToBase64Stable = useCallback(
+    async () => exportCanvasRef.current?.() ?? null, []
+  );
+
   const feedback = useFeedback({
     isBlank: session.isBlank,
     currentUser,
     persistence,
+    sessionId,
+    exportCanvasToBase64: exportCanvasToBase64Stable,
   });
-  const chat = useChat();
+  const chat = useChat(sessionId);
 
   const handleChatInputResize = useCallback(() => {
     const el = chatInputRef.current;
@@ -190,6 +200,11 @@ export function SessionPageInner({ sessionId }: { sessionId: string }) {
     previewShape,
     showGrid,
   });
+
+  // Wire canvas export ref now that useCanvasDrawing has run
+  useEffect(() => {
+    exportCanvasRef.current = canvas.exportCanvasToBase64;
+  }, [canvas.exportCanvasToBase64]);
 
   // ── Title effects ────────────────────────────────────────────────────────
 

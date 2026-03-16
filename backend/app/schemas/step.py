@@ -29,8 +29,19 @@ class StepRead(BaseModel):
 class AnalysisRequest(BaseModel):
     session_id: str
     snapshot_id: str | None = None
+    image_base64: str | None = None  # optional pre-rendered PNG from the frontend canvas
 
 
 class AnalysisResponse(BaseModel):
     steps: list[StepRead]
     summary: str | None = None
+
+
+class GradingChatRequest(BaseModel):
+    session_id: str
+    message: str
+
+
+class GradingChatResponse(BaseModel):
+    reply: str
+    has_more_questions: bool = False

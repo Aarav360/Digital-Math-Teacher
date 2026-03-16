@@ -19,6 +19,10 @@ apscheduler>=3.10.4
 pydantic>=2.10.0
 pydantic-settings>=2.6.0
 
+# Grading pipeline (Qwen vision models via HuggingFace Inference API)
+huggingface-hub>=0.20.0
+Pillow>=10.0.0
+
 # Optional: LLM & math (stub-friendly)
 # openai>=1.0.0
 # sympy>=1.12

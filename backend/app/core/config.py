@@ -44,5 +44,16 @@ class Settings(BaseSettings):
     # Storage (for snapshot images)
     storage_bucket: str | None = None
 
+    # Hugging Face / Qwen grading pipeline
+    hf_token: str | None = None
+    qwen_analyzer_model: str = "Qwen/Qwen3-VL-8B-Instruct"
+    qwen_grader_model: str = "Qwen/Qwen2.5-VL-72B-Instruct"
+    qwen_analyzer_timeout: int = 60
+    qwen_grader_timeout: int = 180
+    qwen_max_retries: int = 3
+    qwen_retry_delay: int = 5
+    qwen_canvas_width: int = 800
+    qwen_canvas_height: int = 600
+
 
 settings = Settings()

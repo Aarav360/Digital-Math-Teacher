@@ -380,9 +380,10 @@ export function useCanvasDrawing({
 
   // ── Export ─────────────────────────────────────────────────────────────────
 
-  const handleExport = useCallback(async () => {
+  /** Render the current canvas state to an offscreen canvas and return it. */
+  const renderToOffscreenCanvas = useCallback(async (): Promise<HTMLCanvasElement | null> => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const { width: W, height: H } = canvasSizeRef.current;
     const { strokes: allStrokes, shapes: allShapes, textItems, imageItems: allImages, graphItems: allGraphs } = content.state;
@@ -390,7 +391,7 @@ export function useCanvasDrawing({
     off.width = W * dpr;
     off.height = H * dpr;
     const ctx = off.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
     ctx.scale(dpr, dpr);
     ctx.fillStyle = getCssVar("--canvas-bg");
     ctx.fillRect(0, 0, W, H);
@@ -463,11 +464,26 @@ export function useCanvasDrawing({
       }
     }
     ctx.restore();
+    return off;
+  }, [canvasRef, canvasSizeRef, content.state, imageCacheRef, graphCacheRef, pan, scale]);
+
+  const handleExport = useCallback(async () => {
+    const off = await renderToOffscreenCanvas();
+    if (!off) return;
     const link = document.createElement("a");
     link.download = "whiteboard.png";
     link.href = off.toDataURL("image/png");
     link.click();
-  }, [canvasRef, canvasSizeRef, content.state, imageCacheRef, graphCacheRef, pan, scale]);
+  }, [renderToOffscreenCanvas]);
 
-  return { redrawCanvas, handleExport };
+  /** Export the canvas as a raw base64 PNG string (no data URI prefix). */
+  const exportCanvasToBase64 = useCallback(async (): Promise<string | null> => {
+    const off = await renderToOffscreenCanvas();
+    if (!off) return null;
+    const dataUrl = off.toDataURL("image/png");
+    // Strip the "data:image/png;base64," prefix — backend expects raw base64
+    return dataUrl.replace(/^data:image\/\w+;base64,/, "");
+  }, [renderToOffscreenCanvas]);
+
+  return { redrawCanvas, handleExport, exportCanvasToBase64 };
 }
